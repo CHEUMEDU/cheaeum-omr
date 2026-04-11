@@ -323,9 +323,9 @@ export default function App(){
             // 주관식: 정답키에 파이프가 있으면 복수 blank (N개 입력란)
             const keyVal=isSub&&aKey?(aKey[String(qi+1)]??aKey[qi+1]??""):"";
             const nBlanks=isSub&&typeof keyVal==="string"&&keyVal.indexOf("|")!==-1?keyVal.split("|").length:1;
-            const subStr=typeof sel==="string"?sel:(sel||"");
-            const subParts=subStr.split("|");
-            while(subParts.length<nBlanks)subParts.push("");
+            const subStr=isSub?(typeof sel==="string"?sel:""):"";
+            const subParts=isSub?subStr.split("|"):[];
+            if(isSub){while(subParts.length<nBlanks)subParts.push("");}
             const updateBlank=(idx,val)=>{const np=[...subParts];np[idx]=val;hSub(qi,np.slice(0,nBlanks).join("|"));};
             return(<div key={qi} id={`q-${qi}`} style={{...S.qR,borderLeft:fi?`3px solid ${isSub?T.accent:T.gold}`:`3px solid transparent`,background:fi?(isSub?T.accentLight+"66":T.goldPale):T.white,flexDirection:isSub&&nBlanks>1?"column":"row",alignItems:isSub&&nBlanks>1?"stretch":"center"}}>
               <div style={{display:"flex",alignItems:"center",width:"100%"}}>
