@@ -17,6 +17,8 @@ function lsSet(o){try{localStorage.setItem(LS_KEY,JSON.stringify(o));}catch(e){}
 const T={gold:"#D4A017",goldDark:"#B8860B",goldDeep:"#8B6914",goldLight:"#FFF3D0",goldPale:"#FFFBF0",goldMuted:"#F5E6B8",bg:"#FAFAF7",text:"#1A1A1A",textSub:"#5C5C5C",textMuted:"#999999",border:"#E8E4DA",borderLight:"#F0EDE4",accent:"#2E7D32",accentLight:"#E8F5E9",danger:"#C62828",dangerLight:"#FFEBEE",white:"#FFFFFF"};
 
 function todayStr(){const d=new Date();return`${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,"0")}.${String(d.getDate()).padStart(2,"0")}`;}
+function todayIso(){const d=new Date();return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
+function isoToDot(s){return(s||"").replace(/-/g,".");}
 function vl(v){if(!v&&v!==0)return"–";const i=CV.indexOf(v);return i>=0?CL[i]:String(v);}
 function getSecs(n){const s=[];for(let i=0;i<n;i+=SEC){s.push({start:i+1,end:Math.min(i+SEC,n),label:`${i+1}–${Math.min(i+SEC,n)}`});}return s;}
 
@@ -65,6 +67,7 @@ export default function App(){
   const[nm,setNm]=useState(_ls.nm||"");
   const[ph,setPh]=useState(_ls.ph||"");
   const[sub,setSub]=useState("");const[gr,setGr]=useState("");const[lv,setLv]=useState("");const[et,setEt]=useState("");
+  const[pd,setPd]=useState(todayIso());
   const[todayExams,setTodayExams]=useState(null);const[loadingExams,setLoadingExams]=useState(false);
   const[history,setHistory]=useState(null);const[loadingHist,setLoadingHist]=useState(false);const[histErr,setHistErr]=useState("");
   const[tq,setTq]=useState(100);const[cq,setCq]=useState("");
@@ -75,7 +78,8 @@ export default function App(){
   const[sending,setSending]=useState(false);const[sendOk,setSendOk]=useState(null);
 
   const cn=(sub&&gr&&lv)?`${sub} ${gr} ${lv}반`:"";
-  const ds=todayStr();
+  const ds=isoToDot(pd);
+  const isToday=pd===todayIso();
   const secs=useMemo(()=>getSecs(qc),[qc]);
   const sRefs=useRef([]);
   const ac=useMemo(()=>ans.filter(a=>a!==null&&a!=="").length,[ans]);
@@ -93,7 +97,7 @@ export default function App(){
     if(!gr)return alert("학년을 선택하세요.");if(!lv)return alert("레벨을 선택하세요.");
     lsSet({nm:nm.trim(),ph});
     setLoadingExams(true);setTodayExams(null);
-    fetch(`${SHEETS_URL}?action=list_exams_today&subject=${encodeURIComponent(sub)}&grade=${encodeURIComponent(gr)}&level=${encodeURIComponent(lv)}`)
+    fetch(`${SHEETS_URL}?action=list_exams_today&subject=${encodeURIComponent(sub)}&grade=${encodeURIComponent(gr)}&level=${encodeURIComponent(lv)}&date=${encodeURIComponent(pd)}`)
       .then(r=>r.json()).then(d=>{setTodayExams(d.exams||[]);setLoadingExams(false);}).catch(()=>{setTodayExams([]);setLoadingExams(false);});
   };
   const hPickExam=(ex)=>{
@@ -125,7 +129,7 @@ export default function App(){
     setSending(false);setScr("result");
   };
 
-  const hReset=()=>{setAns(Array(qc).fill(null));setRes(null);setWo(false);setSendOk(null);setScr("info");setSec(0);setNm("");setSub("");setGr("");setLv("");setEt("");setAKey(null);setTKey(null);setALoad(false);setANF(false);setTq(100);setCq("");};
+  const hReset=()=>{setAns(Array(qc).fill(null));setRes(null);setWo(false);setSendOk(null);setScr("info");setSec(0);setNm("");setSub("");setGr("");setLv("");setEt("");setAKey(null);setTKey(null);setALoad(false);setANF(false);setTq(100);setCq("");setPd(todayIso());setTodayExams(null);};
   const hRetry=()=>{setAns(Array(qc).fill(null));setRes(null);setWo(false);setSendOk(null);setScr("input");setSec(0);};
   const scTo=(i)=>{setSec(i);sRefs.current[i]?.scrollIntoView({behavior:"smooth",block:"start"});};
   const goUA=()=>{const i=ans.findIndex(a=>a===null||a==="");if(i===-1)return alert("모든 문항에 답했습니다!");setSec(Math.floor(i/SEC));setTimeout(()=>{document.getElementById(`q-${i}`)?.scrollIntoView({behavior:"smooth",block:"center"});},100);};
@@ -145,7 +149,7 @@ export default function App(){
 
       {/* ═══ 정보 입력 (답안 제출 탭) ═══ */}
       {scr==="info"&&tab==="submit"&&(<div style={S.wrap} className="fade-up">
-        <div style={S.hero}><div style={{fontSize:36,marginBottom:4}}>✏️</div><h1 style={S.heroT}>답안 제출</h1><p style={S.heroD}>본인 정보와 반을 선택하면<br/>오늘 시험 목록이 나타나요</p></div>
+        <div style={S.hero}><div style={{fontSize:36,marginBottom:4}}>✏️</div><h1 style={S.heroT}>답안 제출</h1><p style={S.heroD}>본인 정보와 반을 선택하면<br/>해당 날짜의 시험 목록이 나타나요</p></div>
         <div style={S.card}>
           <div style={{marginBottom:14}}><div style={S.label}>이름 <span style={{color:T.danger}}>*</span></div><input style={S.inp} placeholder="이름을 입력하세요" value={nm} onChange={e=>setNm(e.target.value)}/></div>
           <div style={{marginBottom:14}}><div style={S.label}>핸드폰 뒷 4자리 <span style={{color:T.danger}}>*</span></div><input style={S.inp} placeholder="예: 1234" value={ph} onChange={e=>setPh(e.target.value.replace(/[^0-9]/g,"").slice(0,4))} inputMode="numeric" maxLength={4}/></div>
@@ -153,18 +157,27 @@ export default function App(){
           <Chip label="학년" req opts={GRADES} val={gr} onChange={setGr}/>
           <Chip label="레벨" req opts={LEVELS} val={lv} onChange={setLv} custom/>
           {cn&&<div style={S.clPrev}><span style={{fontSize:12,color:T.textMuted}}>반 이름</span><span style={{fontSize:15,fontWeight:700,color:T.goldDark}}>{cn}</span></div>}
-          <button style={S.btnG} onClick={hLookupExams} disabled={loadingExams}>{loadingExams?"시험 찾는 중...":"🔍 오늘의 시험 찾기"}</button>
+          <div style={{marginBottom:14}}>
+            <div style={S.label}>시험 날짜 <span style={{color:T.danger}}>*</span></div>
+            <input type="date" style={S.inp} value={pd} onChange={e=>{setPd(e.target.value||todayIso());setTodayExams(null);}}/>
+            <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>
+              <button type="button" onClick={()=>{setPd(todayIso());setTodayExams(null);}} style={{padding:"6px 12px",fontSize:12,fontWeight:600,borderRadius:8,border:`1.5px solid ${isToday?T.goldDark:T.border}`,background:isToday?T.goldLight:T.white,color:isToday?T.goldDeep:T.textSub,cursor:"pointer",fontFamily:"inherit"}}>오늘</button>
+              <button type="button" onClick={()=>{const d=new Date();d.setDate(d.getDate()-1);setPd(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`);setTodayExams(null);}} style={{padding:"6px 12px",fontSize:12,fontWeight:600,borderRadius:8,border:`1.5px solid ${T.border}`,background:T.white,color:T.textSub,cursor:"pointer",fontFamily:"inherit"}}>어제</button>
+              <button type="button" onClick={()=>{const d=new Date();d.setDate(d.getDate()-2);setPd(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`);setTodayExams(null);}} style={{padding:"6px 12px",fontSize:12,fontWeight:600,borderRadius:8,border:`1.5px solid ${T.border}`,background:T.white,color:T.textSub,cursor:"pointer",fontFamily:"inherit"}}>그저께</button>
+            </div>
+            {!isToday&&<div style={{marginTop:6,fontSize:11,color:T.goldDeep,fontWeight:600}}>📅 {ds} 시험을 찾아요 (보충/미리보기)</div>}
+          </div>
+          <button style={S.btnG} onClick={hLookupExams} disabled={loadingExams}>{loadingExams?"시험 찾는 중...":(isToday?"🔍 오늘의 시험 찾기":`🔍 ${ds} 시험 찾기`)}</button>
           {todayExams!==null&&(<div style={{marginTop:14}}>
-            {todayExams.length===0?(<div style={{padding:"14px",background:T.dangerLight,borderRadius:10,color:T.danger,fontSize:13,fontWeight:600,textAlign:"center"}}>오늘 {cn}에서 등록된 시험이 없습니다.<br/>선생님께 문의하세요.</div>):(
+            {todayExams.length===0?(<div style={{padding:"14px",background:T.dangerLight,borderRadius:10,color:T.danger,fontSize:13,fontWeight:600,textAlign:"center"}}>{ds} {cn}에서 등록된 시험이 없습니다.<br/>선생님께 문의하세요.</div>):(
               <>
-                <div style={{fontSize:12,fontWeight:700,color:T.goldDeep,marginBottom:8}}>오늘 {cn} 시험 ({todayExams.length}개)</div>
+                <div style={{fontSize:12,fontWeight:700,color:T.goldDeep,marginBottom:8}}>{ds} {cn} 시험 ({todayExams.length}개)</div>
                 {todayExams.map((ex,i)=>(<button key={i} onClick={()=>hPickExam(ex)} style={{width:"100%",padding:"12px 14px",marginBottom:6,background:T.goldLight,border:`1.5px solid ${T.goldMuted}`,borderRadius:10,cursor:"pointer",fontFamily:"inherit",textAlign:"left",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <div><div style={{fontSize:14,fontWeight:700,color:T.goldDeep}}>{ex.examType}{ex.round?` · ${ex.round}`:""}</div><div style={{fontSize:11,color:T.textMuted,marginTop:2}}>{ex.totalQuestions}문항</div></div>
                   <div style={{fontSize:18,color:T.goldDark}}>→</div>
                 </button>))}
               </>)}
           </div>)}
-          <div style={{...S.dtRow,marginTop:12}}><span style={{fontSize:12,color:T.textMuted}}>시험 날짜</span><span style={{fontSize:14,fontWeight:600,color:T.text}}>{ds}</span></div>
         </div>
       </div>)}
 
