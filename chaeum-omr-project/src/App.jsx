@@ -19,11 +19,58 @@ const T={gold:"#D4A017",goldDark:"#B8860B",goldDeep:"#8B6914",goldLight:"#FFF3D0
 function todayStr(){const d=new Date();return`${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,"0")}.${String(d.getDate()).padStart(2,"0")}`;}
 function todayIso(){const d=new Date();return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
 function isoToDot(s){return(s||"").replace(/-/g,".");}
-function vl(v){if(!v&&v!==0)return"–";const i=CV.indexOf(v);return i>=0?CL[i]:String(v);}
+function vl(v){
+  if(v===null||v===undefined||v==="")return"–";
+  if(Array.isArray(v)){
+    if(v.length===0)return"–";
+    return v.map(x=>{const i=CV.indexOf(Number(x));return i>=0?CL[i]:String(x);}).join(", ");
+  }
+  // 문자열에 쉼표가 있으면 복수정답으로 취급
+  if(typeof v==="string"&&v.indexOf(",")!==-1){
+    return v.split(",").map(s=>s.trim()).map(x=>{const n=Number(x);const i=CV.indexOf(n);return i>=0?CL[i]:x;}).join(", ");
+  }
+  const n=Number(v);const i=CV.indexOf(n);
+  return i>=0?CL[i]:String(v);
+}
+// 복수정답 정규화: [2,3] / "3,2" / 2 → "2,3"
+function normAns(v){
+  if(v===null||v===undefined||v==="")return"";
+  if(Array.isArray(v))return[...v].map(x=>String(x).trim()).filter(Boolean).sort().join(",");
+  const s=String(v);
+  if(s.indexOf(",")!==-1)return s.split(",").map(x=>x.trim()).filter(Boolean).sort().join(",");
+  return s.trim();
+}
+// 답안이 "채워진" 상태인지 (배열/문자열/숫자 모두 고려)
+function isFilled(v){
+  if(v===null||v===undefined||v==="")return false;
+  if(Array.isArray(v))return v.length>0;
+  return true;
+}
+// 주관식 텍스트 정규화 (공백/대소문자/문장부호 차이 흡수)
+function normText(s){
+  return String(s||"").trim().toLowerCase().replace(/\s+/g," ").replace(/[.!?,·~]+$/,"");
+}
+// 주관식 복수 blank 채점 (파이프 구분, 각 blank 내 슬래시는 대체답)
+function gradeSubMulti(studentStr,keyStr){
+  const sParts=String(studentStr||"").split("|").map(x=>x.trim());
+  const kParts=String(keyStr||"").split("|").map(p=>p.split("/").map(x=>x.trim()));
+  const total=kParts.length;
+  let correct=0;const details=[];
+  for(let i=0;i<total;i++){
+    const sv=normText(sParts[i]||"");
+    const alts=kParts[i].map(normText).filter(Boolean);
+    const ok=sv!==""&&alts.some(a=>a===sv);
+    if(ok)correct++;
+    details.push({idx:i+1,sv:sParts[i]||"",key:kParts[i].join(" 또는 "),ok});
+  }
+  return{correct,total,partial:total>0?correct/total:0,details};
+}
 function getSecs(n){const s=[];for(let i=0;i<n;i+=SEC){s.push({start:i+1,end:Math.min(i+SEC,n),label:`${i+1}–${Math.min(i+SEC,n)}`});}return s;}
 
 function grade(ans,key,types,totalQ){
   let oc=0,ow=0,sc=0,totalObj=0,totalSub=0;const det=[];
+  // 주관식 부분점수 합계 (0~totalSub 사이 소수)
+  let subPartialSum=0;
   const N=totalQ||ans.length;
   // 1) 전체 문항 유형 집계 (답을 안 했어도 카운트)
   for(let i=0;i<N;i++){
@@ -34,20 +81,50 @@ function grade(ans,key,types,totalQ){
   }
   // 2) 학생 답안 채점
   for(let i=0;i<ans.length;i++){
-    if(ans[i]===null||ans[i]==="")continue;
+    if(!isFilled(ans[i]))continue;
     const qk=String(i+1);
     const tv=types?(types[qk]??types[i]):null;
     const isObj=!tv||tv==="obj"||tv==="mc";
     const cRaw=key?(key[qk]??key[i]):null;
     const c=(cRaw!==null&&cRaw!==undefined&&cRaw!=="")?String(cRaw):null;
-    const u=String(ans[i]);
-    if(isObj){if(c!==null){if(u===c){oc++;det.push({q:i+1,s:u,c,r:"정답",t:"obj"});}else{ow++;det.push({q:i+1,s:u,c,r:"오답",t:"obj"});}}}
-    else{sc++;det.push({q:i+1,s:u,c:c||"",r:"채점중",t:"sub"});}
+    const uRaw=ans[i];
+    if(isObj){
+      // 객관식: 정렬 정규화 후 비교 (복수정답 지원)
+      const uNorm=normAns(uRaw);
+      const cNorm=c!==null?normAns(c):null;
+      const uDisp=Array.isArray(uRaw)?uRaw.join(","):String(uRaw);
+      if(cNorm!==null){
+        if(uNorm===cNorm){oc++;det.push({q:i+1,s:uDisp,c,r:"정답",t:"obj"});}
+        else{ow++;det.push({q:i+1,s:uDisp,c,r:"오답",t:"obj"});}
+      }
+    }else{
+      // 주관식: 정답키가 있으면 자동 채점 (부분점수 지원)
+      const uStr=String(uRaw);
+      if(c!==null){
+        const gr=gradeSubMulti(uStr,c);
+        subPartialSum+=gr.partial;
+        if(gr.total>1){
+          const tag=`${gr.correct}/${gr.total}`;
+          const r=gr.correct===gr.total?"정답":(gr.correct===0?"오답":"부분정답");
+          det.push({q:i+1,s:uStr.replace(/\|/g," · "),c:String(c).replace(/\|/g," · "),r,t:"sub",partial:tag,subDetails:gr.details});
+        }else{
+          const r=gr.correct===1?"정답":"오답";
+          det.push({q:i+1,s:uStr,c:String(c),r,t:"sub"});
+        }
+        sc++;
+      }else{
+        sc++;det.push({q:i+1,s:uStr,c:"",r:"채점중",t:"sub"});
+      }
+    }
   }
   const to=oc+ow;
-  // 점수는 전체 객관식 문항 수 기준 (답 안한 문항은 오답 처리)
-  const denom=totalObj>0?totalObj:(to>0?to:N);
-  return{oc,ow,sc,to,totalObj,totalSub,totalQ:N,score:denom>0?Math.round((oc/denom)*100):0,det};
+  // 점수: 객관식 정답수 + 주관식 부분점수합 / 전체문항수 × 100
+  // (정답키 없는 주관식은 분모에서 제외)
+  const hasSubKey=types&&key?Object.keys(types).filter(k=>(types[k]==="sub")&&key[k]).length:0;
+  const denom=totalObj+hasSubKey;
+  const num=oc+subPartialSum;
+  const score=denom>0?Math.round((num/denom)*100):0;
+  return{oc,ow,sc,to,totalObj,totalSub,totalQ:N,subPartial:Math.round(subPartialSum*100)/100,score,det};
 }
 
 function Chip({label,req,opts,val,onChange,custom:allowC}){
@@ -82,12 +159,29 @@ export default function App(){
   const isToday=pd===todayIso();
   const secs=useMemo(()=>getSecs(qc),[qc]);
   const sRefs=useRef([]);
-  const ac=useMemo(()=>ans.filter(a=>a!==null&&a!=="").length,[ans]);
-  const ss=useMemo(()=>secs.map(s=>{let d=0;for(let i=s.start-1;i<s.end;i++)if(ans[i]!==null&&ans[i]!=="")d++;return{...s,done:d,total:s.end-s.start+1};}),[ans,secs]);
+  const ac=useMemo(()=>ans.filter(a=>isFilled(a)).length,[ans]);
+  const ss=useMemo(()=>secs.map(s=>{let d=0;for(let i=s.start-1;i<s.end;i++)if(isFilled(ans[i]))d++;return{...s,done:d,total:s.end-s.start+1};}),[ans,secs]);
 
   useEffect(()=>{setAns(Array(qc).fill(null));},[qc]);
 
-  const hAns=useCallback((i,v)=>{setAns(p=>{const n=[...p];n[i]=p[i]===v?null:v;return n;});},[]);
+  // 객관식 버튼 토글: 같은 값 재클릭 시 해제, 다른 값 클릭 시 복수정답 추가
+  const hAns=useCallback((i,v)=>{setAns(p=>{
+    const n=[...p];
+    const cur=n[i];
+    if(cur===null||cur===undefined||cur===""){n[i]=v;}
+    else if(Array.isArray(cur)){
+      if(cur.includes(v)){
+        const nx=cur.filter(x=>x!==v);
+        n[i]=nx.length===0?null:(nx.length===1?nx[0]:nx);
+      }else{
+        n[i]=[...cur,v].sort((a,b)=>a-b);
+      }
+    }else{
+      if(cur===v){n[i]=null;}
+      else{n[i]=[cur,v].sort((a,b)=>a-b);}
+    }
+    return n;
+  });},[]);
   const hSub=useCallback((i,v)=>{setAns(p=>{const n=[...p];n[i]=v;return n;});},[]);
 
   const hLookupExams=()=>{
@@ -121,10 +215,12 @@ export default function App(){
   const hFinal=async()=>{
     setConf(false);setSending(true);
     const r=aKey?grade(ans,aKey,tKey,qc):null;setRes(r);
+    // 복수정답 배열은 "2,3" 형태 문자열로 직렬화
+    const ansSerialized=ans.map(v=>Array.isArray(v)?v.join(","):v);
     try{await fetch(SHEETS_URL,{method:"POST",mode:"no-cors",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({action:"student_answer",name:nm,phone:ph,className:cn,subject:sub,grade:gr,level:lv,examName:et,date:ds,
         totalGraded:r?r.to+r.sc:ac,score:r?r.score:null,correct:r?r.oc:null,wrong:r?r.ow:null,
-        wrongQuestions:r?r.det.filter(d=>d.r==="오답").map(d=>d.q):[],answers:ans})});
+        wrongQuestions:r?r.det.filter(d=>d.r==="오답").map(d=>d.q):[],answers:ansSerialized})});
       setSendOk(true);}catch(e){setSendOk(false);}
     setSending(false);setScr("result");
   };
@@ -221,14 +317,32 @@ export default function App(){
 
         <div style={S.qLW}>{secs.map((s,si)=>(<div key={si} ref={el=>sRefs.current[si]=el}>
           <div style={S.secH}><span style={S.secTi}>{s.label}번</span><span style={S.secC}>{ss[si].done}/{ss[si].total}</span></div>
-          {Array.from({length:s.end-s.start+1},(_,j)=>{const qi=s.start-1+j,sel=ans[qi],isSub=tKey&&tKey[qi]==="sub",fi=sel!==null&&sel!=="";
-            return(<div key={qi} id={`q-${qi}`} style={{...S.qR,borderLeft:fi?`3px solid ${isSub?T.accent:T.gold}`:`3px solid transparent`,background:fi?(isSub?T.accentLight+"66":T.goldPale):T.white}}>
-              <div style={{...S.qN,background:fi?(isSub?T.accent:T.gold):T.borderLight,color:fi?T.white:T.textMuted}}>{qi+1}</div>
-              {isSub?(<div style={{flex:1,display:"flex",alignItems:"center",gap:6}}>
-                <span style={{fontSize:10,fontWeight:700,color:T.accent,background:T.accentLight,padding:"2px 6px",borderRadius:4}}>주관식</span>
-                <input style={S.sInp} placeholder="답을 입력하세요" value={sel||""} onChange={e=>hSub(qi,e.target.value)}/></div>
-              ):(<><div style={S.cR}>{CV.map((v,ci)=>{const p=sel===v;return(<button key={v} onClick={()=>hAns(qi,v)} style={{...S.cBtn,background:p?T.goldDark:T.white,color:p?T.white:T.text,borderColor:p?T.goldDark:T.border,fontWeight:p?700:400,transform:p?"scale(1.06)":"scale(1)",boxShadow:p?`0 2px 8px ${T.goldMuted}`:"none"}}>{CL[ci]}</button>);})}</div>
-                <div style={{...S.sB,background:fi?T.goldLight:T.borderLight,color:fi?T.goldDeep:T.textMuted}}>{fi?vl(sel):"–"}</div></>)}
+          {Array.from({length:s.end-s.start+1},(_,j)=>{const qi=s.start-1+j,sel=ans[qi],_tv=tKey?(tKey[String(qi+1)]??tKey[qi+1]??tKey[qi]):null,isSub=_tv==="sub",fi=isFilled(sel);
+            const selArr=Array.isArray(sel)?sel:(sel!==null&&sel!==""&&sel!==undefined&&typeof sel!=="string"?[Number(sel)]:[]);
+            const multi=selArr.length>1;
+            // 주관식: 정답키에 파이프가 있으면 복수 blank (N개 입력란)
+            const keyVal=isSub&&aKey?(aKey[String(qi+1)]??aKey[qi+1]??""):"";
+            const nBlanks=isSub&&typeof keyVal==="string"&&keyVal.indexOf("|")!==-1?keyVal.split("|").length:1;
+            const subStr=typeof sel==="string"?sel:(sel||"");
+            const subParts=subStr.split("|");
+            while(subParts.length<nBlanks)subParts.push("");
+            const updateBlank=(idx,val)=>{const np=[...subParts];np[idx]=val;hSub(qi,np.slice(0,nBlanks).join("|"));};
+            return(<div key={qi} id={`q-${qi}`} style={{...S.qR,borderLeft:fi?`3px solid ${isSub?T.accent:T.gold}`:`3px solid transparent`,background:fi?(isSub?T.accentLight+"66":T.goldPale):T.white,flexDirection:isSub&&nBlanks>1?"column":"row",alignItems:isSub&&nBlanks>1?"stretch":"center"}}>
+              <div style={{display:"flex",alignItems:"center",width:"100%"}}>
+                <div style={{...S.qN,background:fi?(isSub?T.accent:T.gold):T.borderLight,color:fi?T.white:T.textMuted}}>{qi+1}</div>
+                {isSub?(<div style={{flex:1,display:"flex",alignItems:"center",gap:6}}>
+                  <span style={{fontSize:10,fontWeight:700,color:T.accent,background:T.accentLight,padding:"2px 6px",borderRadius:4}}>주관식{nBlanks>1?` ${nBlanks}개`:""}</span>
+                  {nBlanks===1?(<input style={S.sInp} placeholder="답을 입력하세요" value={subStr} onChange={e=>hSub(qi,e.target.value)}/>):null}
+                </div>
+                ):(<><div style={S.cR}>{CV.map((v,ci)=>{const p=selArr.includes(v);return(<button key={v} onClick={()=>hAns(qi,v)} style={{...S.cBtn,background:p?T.goldDark:T.white,color:p?T.white:T.text,borderColor:p?T.goldDark:T.border,fontWeight:p?700:400,transform:p?"scale(1.06)":"scale(1)",boxShadow:p?`0 2px 8px ${T.goldMuted}`:"none"}}>{CL[ci]}</button>);})}</div>
+                  <div style={{...S.sB,background:fi?(multi?T.accentLight:T.goldLight):T.borderLight,color:fi?(multi?T.accent:T.goldDeep):T.textMuted,fontWeight:multi?700:600}}>{fi?vl(sel):"–"}</div></>)}
+              </div>
+              {isSub&&nBlanks>1&&(<div style={{display:"flex",flexDirection:"column",gap:5,marginTop:6,paddingLeft:36}}>
+                {Array.from({length:nBlanks},(_,k)=>(<div key={k} style={{display:"flex",alignItems:"center",gap:6}}>
+                  <span style={{fontSize:11,fontWeight:700,color:T.accent,minWidth:22,textAlign:"center"}}>({k+1})</span>
+                  <input style={{...S.sInp,flex:1}} placeholder={`${k+1}번째 답`} value={subParts[k]||""} onChange={e=>updateBlank(k,e.target.value)}/>
+                </div>))}
+              </div>)}
             </div>);})}
         </div>))}</div>
 
@@ -251,7 +365,7 @@ export default function App(){
             <div style={{fontSize:13,opacity:.9}}>{nm} · {cn}</div>
             <div style={{fontSize:56,fontWeight:800,lineHeight:1.1,margin:"4px 0"}}>{res.score}<span style={{fontSize:22}}>점</span></div>
             <div style={{fontSize:13,opacity:.85,marginBottom:4}}>{et} · {ds}</div>
-            <div style={{fontSize:12,opacity:.7,marginBottom:8}}>전체 {res.totalObj}문항 중 {res.oc}문항 정답 · {res.ow}오답 · {res.totalObj-res.to}미응답{res.sc>0?` · 주관식 ${res.totalSub}문항`:""}</div>
+            <div style={{fontSize:12,opacity:.7,marginBottom:8}}>객관식 {res.oc}/{res.totalObj}정답{res.subPartial>0?` · 주관식 +${res.subPartial}점 (부분점수)`:""}{res.totalSub>0?` · 주관식 ${res.totalSub}문항`:""}</div>
             <div style={S.scFB}>{res.score>=90?"🎉 훌륭합니다!":res.score>=70?"💪 잘했어요!":"📚 오답을 복습하세요!"}</div>
           </div>
           <div style={{padding:"10px 14px",borderRadius:10,marginBottom:14,fontSize:13,fontWeight:600,textAlign:"center",background:sendOk!==false?T.accentLight:T.dangerLight,color:sendOk!==false?T.accent:T.danger}}>{sendOk!==false?"✅ 결과가 선생님에게 전송되었습니다":"⚠️ 전송 실패"}</div>
@@ -261,13 +375,13 @@ export default function App(){
               <button onClick={()=>setWo(!wo)} style={{padding:"5px 12px",fontSize:12,fontWeight:600,border:"none",borderRadius:6,cursor:"pointer",fontFamily:"inherit",background:wo?T.dangerLight:T.borderLight,color:wo?T.danger:T.textSub}}>{wo?"❌ 오답만":"전체 보기"}</button></div>
             <div style={{border:`1px solid ${T.border}`,borderRadius:10,overflow:"hidden"}}>
               <div style={S.tH}><span style={{flex:"0 0 36px",textAlign:"center"}}>#</span><span style={{flex:"0 0 36px",textAlign:"center"}}>유형</span><span style={{flex:1,textAlign:"center"}}>내 답</span><span style={{flex:1,textAlign:"center"}}>정답</span><span style={{flex:"0 0 40px",textAlign:"center"}}>결과</span></div>
-              {res.det.filter(d=>wo?d.r==="오답":true).map(d=>(
-                <div key={d.q} style={{...S.tR,background:d.r==="정답"?"#F1F8E9":d.r==="오답"?"#FFF5F5":T.goldPale}}>
+              {res.det.filter(d=>wo?d.r==="오답"||d.r==="부분정답":true).map(d=>(
+                <div key={d.q} style={{...S.tR,background:d.r==="정답"?"#F1F8E9":d.r==="오답"?"#FFF5F5":d.r==="부분정답"?"#FFF8E1":T.goldPale}}>
                   <span style={{flex:"0 0 36px",textAlign:"center",fontWeight:700,fontSize:12,color:T.textSub}}>{d.q}</span>
                   <span style={{flex:"0 0 36px",textAlign:"center",fontSize:10,fontWeight:700,color:d.t==="sub"?T.accent:T.goldDark}}>{d.t==="sub"?"주관":"객관"}</span>
-                  <span style={{flex:1,textAlign:"center",fontWeight:600,fontSize:14,color:T.text}}>{vl(d.s)}</span>
-                  <span style={{flex:1,textAlign:"center",fontWeight:600,fontSize:14,color:T.goldDark}}>{vl(d.c)}</span>
-                  <span style={{flex:"0 0 40px",textAlign:"center",fontSize:14}}>{d.r==="정답"?"✅":d.r==="오답"?"❌":"⏳"}</span>
+                  <span style={{flex:1,textAlign:"center",fontWeight:600,fontSize:13,color:T.text,wordBreak:"break-word",padding:"0 4px"}}>{d.t==="sub"?(d.s||"–"):vl(d.s)}</span>
+                  <span style={{flex:1,textAlign:"center",fontWeight:600,fontSize:13,color:T.goldDark,wordBreak:"break-word",padding:"0 4px"}}>{d.t==="sub"?(d.c||"–"):vl(d.c)}</span>
+                  <span style={{flex:"0 0 48px",textAlign:"center",fontSize:14}}>{d.r==="정답"?"✅":d.r==="오답"?"❌":d.r==="부분정답"?<span style={{fontSize:11,fontWeight:700,color:"#B8860B"}}>{d.partial}</span>:"⏳"}</span>
                 </div>))}
             </div>
             {res.ow>0&&<div style={{marginTop:12,padding:"10px 12px",background:T.dangerLight,borderRadius:8,lineHeight:1.6}}><span style={{fontWeight:700,fontSize:12,color:T.danger}}>틀린 문항: </span><span style={{fontSize:12,color:T.text}}>{res.det.filter(d=>d.r==="오답").map(d=>d.q).join(", ")}</span></div>}
