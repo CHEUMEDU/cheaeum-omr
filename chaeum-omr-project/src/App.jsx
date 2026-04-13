@@ -310,10 +310,14 @@ export default function App(){
             {todayExams.length===0?(<div style={{padding:"14px",background:T.dangerLight,borderRadius:10,color:T.danger,fontSize:13,fontWeight:600,textAlign:"center"}}>{ds} {cn}에서 등록된 시험이 없습니다.<br/>선생님께 문의하세요.</div>):(
               <>
                 <div style={{fontSize:12,fontWeight:700,color:T.goldDeep,marginBottom:8}}>{ds} {cn} 시험 ({todayExams.length}개)</div>
-                {todayExams.map((ex,i)=>(<button key={i} onClick={()=>hPickExam(ex)} style={{width:"100%",padding:"12px 14px",marginBottom:6,background:T.goldLight,border:`1.5px solid ${T.goldMuted}`,borderRadius:10,cursor:"pointer",fontFamily:"inherit",textAlign:"left",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <div><div style={{fontSize:14,fontWeight:700,color:T.goldDeep}}>{ex.examType}{ex.round?` · ${ex.round}`:""}</div><div style={{fontSize:11,color:T.textMuted,marginTop:2}}>{ex.totalQuestions}문항</div></div>
+                {todayExams.map((ex,i)=>{const tags=[ex.level&&ex.level!=="전체"?ex.level+"반":null,ex.className||null,ex.regTime?ex.regTime+" 등록":null].filter(Boolean);return(<button key={i} onClick={()=>hPickExam(ex)} style={{width:"100%",padding:"12px 14px",marginBottom:6,background:T.goldLight,border:`1.5px solid ${T.goldMuted}`,borderRadius:10,cursor:"pointer",fontFamily:"inherit",textAlign:"left",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:14,fontWeight:700,color:T.goldDeep}}>{ex.examType}{ex.round?` · ${ex.round}`:""}</div>
+                    {tags.length>0&&<div style={{fontSize:11,color:T.textSub,marginTop:3}}>{tags.join(" · ")}</div>}
+                    <div style={{fontSize:11,color:T.textMuted,marginTop:2}}>{ex.totalQuestions}문항{ex.teacher?` · ${ex.teacher} 선생님`:""}</div>
+                  </div>
                   <div style={{fontSize:18,color:T.goldDark}}>→</div>
-                </button>))}
+                </button>);})}
               </>)}
           </div>)}
         </div>
