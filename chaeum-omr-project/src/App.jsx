@@ -50,6 +50,30 @@ function isFilled(v){
 function normText(s){
   return String(s||"").trim().toLowerCase().replace(/\s+/g," ").replace(/[.!?,·~]+$/,"");
 }
+// 정답키 자동 파이프 변환: "(1) A (2) B" / "ⓐ A ⓑ B" / "① A ② B" → "A|B"
+// 이미 파이프가 있으면 그대로 반환
+function normalizeSubKey(v){
+  if(!v||typeof v!=="string")return v||"";
+  if(v.indexOf("|")!==-1)return v;// 이미 파이프 형식
+  // "(1) A (2) B (3) C" 패턴
+  const m1=v.match(/\(\d+\)\s*/g);
+  if(m1&&m1.length>=2){
+    const parts=v.split(/\(\d+\)\s*/).filter(Boolean).map(s=>s.replace(/\s*$|,\s*$/,"").trim());
+    if(parts.length>=2)return parts.join("|");
+  }
+  // "① A ② B" 또는 "ⓐ A ⓑ B" 패턴
+  const circled=/[①②③④⑤⑥⑦⑧⑨⑩ⓐⓑⓒⓓⓔⓕ]/g;
+  const m2=v.match(circled);
+  if(m2&&m2.length>=2){
+    const parts=v.split(circled).filter(Boolean).map(s=>s.replace(/\s*[:：]\s*/,"").replace(/\s*$|,\s*$/,"").trim());
+    if(parts.length>=2)return parts.join("|");
+  }
+  // "또는" → 슬래시 대체답 (단일 blank 안에서)
+  if(/\s+또는\s+/.test(v)&&!v.includes("|")){
+    return v.replace(/\s+또는\s+/g,"/");
+  }
+  return v;
+}
 // 주관식 복수 blank 채점 (파이프 구분, 각 blank 내 슬래시는 대체답)
 function gradeSubMulti(studentStr,keyStr){
   const sParts=String(studentStr||"").split("|").map(x=>x.trim());
@@ -198,8 +222,19 @@ export default function App(){
     setEt(ex.examType);
     const qTotal=Number(ex.totalQuestions)||100;setTq(qTotal);setCq("");
     setAns(Array(qTotal).fill(null));setScr("input");setALoad(false);setANF(false);
-    setAKey(ex.answers||null);setTKey(ex.types||null);
-    if(ex.answers)setALoad(true);else setANF(true);
+    // 주관식 정답키 자동 정규화: "(1) A (2) B" → "A|B", "X 또는 Y" → "X/Y"
+    const rawAns=ex.answers||null;
+    const rawTypes=ex.types||null;
+    if(rawAns&&rawTypes){
+      const normAK={};
+      for(const k of Object.keys(rawAns)){
+        const tv=rawTypes[k];
+        normAK[k]=(tv==="sub")?normalizeSubKey(String(rawAns[k])):String(rawAns[k]);
+      }
+      setAKey(normAK);
+    }else{setAKey(rawAns);}
+    setTKey(rawTypes);
+    if(rawAns)setALoad(true);else setANF(true);
   };
   const hShowHistory=()=>{
     if(!nm.trim())return alert("이름을 입력하세요.");
