@@ -334,13 +334,14 @@ export default function App(){
             {history.length===0?(<div style={{padding:"14px",background:T.borderLight,borderRadius:10,color:T.textMuted,fontSize:13,textAlign:"center"}}>아직 제출한 시험이 없습니다.</div>):(
               <>
                 <div style={{fontSize:12,fontWeight:700,color:T.goldDeep,marginBottom:8}}>총 {history.length}건</div>
-                {history.map((h,i)=>(<div key={i} style={{padding:"12px 14px",marginBottom:6,background:T.goldPale,borderRadius:10,border:`1px solid ${T.goldMuted}`}}>
+                {history.map((h,i)=>{const isPending=h.wrongQuestions&&String(h.wrongQuestions).includes("채점중");const scoreColor=isPending?"#888":h.score>=90?T.accent:h.score>=70?T.goldDark:T.danger;return(<div key={i} style={{padding:"12px 14px",marginBottom:6,background:T.goldPale,borderRadius:10,border:`1px solid ${T.goldMuted}`}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:4}}>
                     <span style={{fontSize:13,fontWeight:700,color:T.text}}>{h.className} · {h.examName}</span>
-                    <span style={{fontSize:18,fontWeight:800,color:h.score>=90?T.accent:h.score>=70?T.goldDark:T.danger}}>{h.score!=null?`${h.score}점`:"—"}</span>
+                    <span style={{fontSize:18,fontWeight:800,color:scoreColor}}>{h.score!=null?(isPending?`${h.score}점 ⏳`:`${h.score}점`):"—"}</span>
                   </div>
                   <div style={{fontSize:11,color:T.textMuted}}>{h.date} · 정답 {h.correct||0} / 오답 {h.wrong||0}{h.wrongQuestions?` · 틀린 문항: ${h.wrongQuestions}`:""}</div>
-                </div>))}
+                  {isPending&&<div style={{fontSize:10,color:T.goldDeep,marginTop:3,fontWeight:600}}>주관식 채점 진행 중 — 최종 점수는 다음날 아침 확인 가능</div>}
+                </div>);})}
               </>)}
           </div>)}
         </div>
