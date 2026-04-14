@@ -217,7 +217,7 @@ export default function App(){
     if(!gr)return alert("학년을 선택하세요.");if(!lv)return alert("레벨을 선택하세요.");
     lsSet({nm:nm.trim(),ph});
     setLoadingExams(true);setTodayExams(null);
-    fetch(`${SHEETS_URL}?action=list_exams_today&subject=${encodeURIComponent(sub)}&grade=${encodeURIComponent(gr)}&level=${encodeURIComponent(lv)}&date=${encodeURIComponent(pd)}`)
+    fetch(`${SHEETS_URL}?action=list_exams_today&subject=${encodeURIComponent(sub)}&grade=${encodeURIComponent(gr)}&level=${encodeURIComponent(lv)}&className=${encodeURIComponent(cn)}&date=${encodeURIComponent(pd)}`)
       .then(r=>r.json()).then(d=>{setTodayExams(d.exams||[]);setLoadingExams(false);}).catch(()=>{setTodayExams([]);setLoadingExams(false);});
   };
   const hPickExam=(ex)=>{
