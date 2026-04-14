@@ -310,13 +310,13 @@ export default function App(){
             {todayExams.length===0?(<div style={{padding:"14px",background:T.dangerLight,borderRadius:10,color:T.danger,fontSize:13,fontWeight:600,textAlign:"center"}}>{ds} {cn}에서 등록된 시험이 없습니다.<br/>선생님께 문의하세요.</div>):(
               <>
                 <div style={{fontSize:12,fontWeight:700,color:T.goldDeep,marginBottom:8}}>{ds} {cn} 시험 ({todayExams.length}개)</div>
-                {todayExams.map((ex,i)=>{const lvTxt=ex.level?(ex.level==="전체"?"전체 대상":ex.level+"반"):"";const tags=[lvTxt||null,ex.className||null].filter(Boolean);const timeTxt=ex.examTime?`${ex.examTime} 시험`:(ex.regTime?ex.regTime+" 등록":"");return(<button key={i} onClick={()=>hPickExam(ex)} style={{width:"100%",padding:"12px 14px",marginBottom:6,background:T.goldLight,border:`1.5px solid ${T.goldMuted}`,borderRadius:10,cursor:"pointer",fontFamily:"inherit",textAlign:"left",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                {(()=>{const sigOf=(ex)=>`${ex.examType}|${ex.round||""}|${ex.level||""}|${ex.className||""}`;const sigCnt={};todayExams.forEach(ex=>{const s=sigOf(ex);sigCnt[s]=(sigCnt[s]||0)+1;});const sigSorted={};Object.keys(sigCnt).forEach(s=>{if(sigCnt[s]>1){sigSorted[s]=todayExams.map((ex,idx)=>({ex,idx})).filter(o=>sigOf(o.ex)===s).sort((a,b)=>{const at=a.ex.examTime||"";const bt=b.ex.examTime||"";if(at&&bt&&at!==bt)return at.localeCompare(bt);return a.idx-b.idx;}).map(o=>o.idx);}});return todayExams.map((ex,i)=>{const lvTxt=ex.level?(ex.level==="전체"?"전체 대상":ex.level+"반"):"";const tags=[lvTxt||null,ex.className||null].filter(Boolean);const timeTxt=ex.examTime?`${ex.examTime} 시험`:(ex.regTime?ex.regTime+" 등록":"");const sig=sigOf(ex);let numSuffix="";if(sigCnt[sig]>1){const pos=sigSorted[sig].indexOf(i);if(pos>=0)numSuffix=` (${pos+1})`;}return(<button key={i} onClick={()=>hPickExam(ex)} style={{width:"100%",padding:"12px 14px",marginBottom:6,background:T.goldLight,border:`1.5px solid ${T.goldMuted}`,borderRadius:10,cursor:"pointer",fontFamily:"inherit",textAlign:"left",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <div style={{flex:1}}>
-                    <div style={{fontSize:14,fontWeight:700,color:T.goldDeep}}>{ex.examType}{ex.round?` · ${ex.round}`:""}{tags.length>0?` (${tags.join(", ")})`:""}</div>
+                    <div style={{fontSize:14,fontWeight:700,color:T.goldDeep}}>{ex.examType}{ex.round?` · ${ex.round}`:""}{tags.length>0?` (${tags.join(", ")})`:""}{numSuffix}</div>
                     <div style={{fontSize:11,color:T.textMuted,marginTop:2}}>{ex.totalQuestions}문항{timeTxt?` · ${timeTxt}`:""}{ex.teacher?` · ${ex.teacher} 선생님`:""}</div>
                   </div>
                   <div style={{fontSize:18,color:T.goldDark}}>→</div>
-                </button>);})}
+                </button>);});})()}
               </>)}
           </div>)}
         </div>
