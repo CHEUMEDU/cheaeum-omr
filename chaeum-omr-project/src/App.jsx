@@ -349,10 +349,10 @@ export default function App(){
             {todayExams.length===0?(<div style={{padding:"14px",background:T.dangerLight,borderRadius:10,color:T.danger,fontSize:13,fontWeight:600,textAlign:"center"}}>{ds} {gr} {selTeacher} 선생님 시험이 없습니다.<br/>선생님께 문의하세요.</div>):(
               <>
                 <div style={{fontSize:12,fontWeight:700,color:T.goldDeep,marginBottom:8}}>{ds} {gr} {selTeacher} 선생님 시험 ({todayExams.length}개)</div>
-                {todayExams.map((ex,i)=>(<button key={i} onClick={()=>hPickExam(ex)} style={{width:"100%",padding:"12px 14px",marginBottom:6,background:T.goldLight,border:`1.5px solid ${T.goldMuted}`,borderRadius:10,cursor:"pointer",fontFamily:"inherit",textAlign:"left",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <div><div style={{fontSize:14,fontWeight:700,color:T.goldDeep}}>{ex.examType}{ex.round?` · ${ex.round}`:""}</div><div style={{fontSize:11,color:T.textMuted,marginTop:2}}>{ex.totalQuestions}문항{ex.examTime?` · ${ex.examTime}`:ex.regTime?` · ${ex.regTime}`:""}{ex.teacher?` · ${ex.teacher} 선생님`:""}</div></div>
+                {todayExams.map((ex,i)=>{const classLabel=[ex.subject,ex.grade,ex.level?(ex.level+"반"):ex.className?"("+ex.className+")":""].filter(Boolean).join(" ");return(<button key={i} onClick={()=>hPickExam(ex)} style={{width:"100%",padding:"12px 14px",marginBottom:6,background:T.goldLight,border:`1.5px solid ${T.goldMuted}`,borderRadius:10,cursor:"pointer",fontFamily:"inherit",textAlign:"left",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div><div style={{fontSize:14,fontWeight:700,color:T.goldDeep}}>{ex.examType}{ex.round?` · ${ex.round}`:""}</div>{classLabel&&<div style={{fontSize:12,fontWeight:600,color:T.goldDark,marginTop:2}}>{classLabel}</div>}<div style={{fontSize:11,color:T.textMuted,marginTop:2}}>{ex.totalQuestions}문항{ex.examTime?` · ${ex.examTime}`:ex.regTime?` · ${ex.regTime}`:""}</div></div>
                   <div style={{fontSize:18,color:T.goldDark}}>→</div>
-                </button>))}
+                </button>);})}
               </>)}
           </div>)}
         </div>
