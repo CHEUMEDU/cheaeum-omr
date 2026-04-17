@@ -50,6 +50,25 @@ function isFilled(v){
 function normText(s){
   return String(s||"").trim().toLowerCase().replace(/\s+/g," ").replace(/[.!?,·~]+$/,"");
 }
+// 주관식 정답키 정규화: "(1) A (2) B (3) C" → "A|B|C",  "(A) X (B) Y" → "X|Y"
+function normalizeSubKey(raw){
+  if(!raw||typeof raw!=="string")return raw;
+  // 이미 파이프 포맷이면 그대로
+  if(raw.indexOf("|")!==-1)return raw;
+  // (1) ... (2) ... (3) ... 패턴 감지
+  const numPat=/\(\d+\)\s*/g;
+  const letPat=/\([A-Za-z]\)\s*/g;
+  let parts;
+  if(numPat.test(raw)){
+    parts=raw.split(/\(\d+\)\s*/).filter(s=>s.trim());
+  }else if(letPat.test(raw)){
+    parts=raw.split(/\([A-Za-z]\)\s*/).filter(s=>s.trim());
+  }else{
+    return raw;
+  }
+  if(parts.length>1)return parts.map(s=>s.trim()).join("|");
+  return raw;
+}
 // 주관식 복수 blank 채점 (파이프 구분, 각 blank 내 슬래시는 대체답)
 function gradeSubMulti(studentStr,keyStr){
   const sParts=String(studentStr||"").split("|").map(x=>x.trim());
@@ -100,16 +119,21 @@ function grade(ans,key,types,totalQ){
     }else{
       // 주관식: 정답키가 있으면 자동 채점 (부분점수 지원)
       const uStr=String(uRaw);
-      if(c!==null){
-        const gr=gradeSubMulti(uStr,c);
-        subPartialSum+=gr.partial;
-        if(gr.total>1){
-          const tag=`${gr.correct}/${gr.total}`;
-          const r=gr.correct===gr.total?"정답":(gr.correct===0?"오답":"부분정답");
-          det.push({q:i+1,s:uStr.replace(/\|/g," · "),c:String(c).replace(/\|/g," · "),r,t:"sub",partial:tag,subDetails:gr.details});
+      const cNormSub=c!==null?normalizeSubKey(c):null;
+      if(cNormSub!==null){
+        // 주관식: 완전 일치만 즉시 "정답", 나머지는 "채점중" (Claude 추후 채점)
+        const gr=gradeSubMulti(uStr,cNormSub);
+        if(gr.correct===gr.total&&gr.total>0){
+          // 모든 blank 정답 → 즉시 정답 처리
+          subPartialSum+=1;
+          if(gr.total>1){
+            det.push({q:i+1,s:uStr.replace(/\|/g," · "),c:String(cNormSub).replace(/\|/g," · "),r:"정답",t:"sub",partial:`${gr.total}/${gr.total}`,subDetails:gr.details});
+          }else{
+            det.push({q:i+1,s:uStr,c:String(cNormSub),r:"정답",t:"sub"});
+          }
         }else{
-          const r=gr.correct===1?"정답":"오답";
-          det.push({q:i+1,s:uStr,c:String(c),r,t:"sub"});
+          // 불완전 또는 오답 → "채점중" (Claude가 부분점수/유사답 판별)
+          det.push({q:i+1,s:uStr.replace(/\|/g," · "),c:"",r:"채점중",t:"sub"});
         }
         sc++;
       }else{
@@ -118,13 +142,15 @@ function grade(ans,key,types,totalQ){
     }
   }
   const to=oc+ow;
-  // 점수: 객관식 정답수 + 주관식 부분점수합 / 전체문항수 × 100
-  // (정답키 없는 주관식은 분모에서 제외)
-  const hasSubKey=types&&key?Object.keys(types).filter(k=>(types[k]==="sub")&&key[k]).length:0;
-  const denom=totalObj+hasSubKey;
+  // 점수: 객관식만 즉시 채점, 주관식은 "채점중" (완전 일치만 즉시 정답)
+  // 주관식 채점중 문항 수
+  const subPending=det.filter(d=>d.t==="sub"&&d.r==="채점중").length;
+  const subCorrect=det.filter(d=>d.t==="sub"&&d.r==="정답").length;
+  // 분모: 객관식 전체 + 즉시 정답 처리된 주관식만
+  const denom=totalObj+subCorrect+subPending;
   const num=oc+subPartialSum;
   const score=denom>0?Math.round((num/denom)*100):0;
-  return{oc,ow,sc,to,totalObj,totalSub,totalQ:N,subPartial:Math.round(subPartialSum*100)/100,score,det};
+  return{oc,ow,sc,to,totalObj,totalSub,totalQ:N,subPartial:Math.round(subPartialSum*100)/100,subPending,subCorrect,score,det};
 }
 
 function Chip({label,req,opts,val,onChange,custom:allowC}){
@@ -146,12 +172,13 @@ export default function App(){
   const[sub,setSub]=useState("");const[gr,setGr]=useState("");const[lv,setLv]=useState("");const[et,setEt]=useState("");
   const[pd,setPd]=useState(todayIso());
   const[todayExams,setTodayExams]=useState(null);const[loadingExams,setLoadingExams]=useState(false);
+  const[teacherList,setTeacherList]=useState([]);const[selTeacher,setSelTeacher]=useState("");
   const[history,setHistory]=useState(null);const[loadingHist,setLoadingHist]=useState(false);const[histErr,setHistErr]=useState("");
   const[tq,setTq]=useState(100);const[cq,setCq]=useState("");
   const qc=cq?parseInt(cq)||100:tq;
   const[ans,setAns]=useState([]);const[res,setRes]=useState(null);
   const[conf,setConf]=useState(false);const[sec,setSec]=useState(0);const[wo,setWo]=useState(false);
-  const[aKey,setAKey]=useState(null);const[tKey,setTKey]=useState(null);const[aLoad,setALoad]=useState(false);const[aNF,setANF]=useState(false);
+  const[aKey,setAKey]=useState(null);const[tKey,setTKey]=useState(null);const[qNumMap,setQNumMap]=useState(null);const[aLoad,setALoad]=useState(false);const[aNF,setANF]=useState(false);
   const[sending,setSending]=useState(false);const[sendOk,setSendOk]=useState(null);
 
   const cn=(sub&&gr&&lv)?`${sub} ${gr} ${lv}반`:"";
@@ -163,6 +190,18 @@ export default function App(){
   const ss=useMemo(()=>secs.map(s=>{let d=0;for(let i=s.start-1;i<s.end;i++)if(isFilled(ans[i]))d++;return{...s,done:d,total:s.end-s.start+1};}),[ans,secs]);
 
   useEffect(()=>{setAns(Array(qc).fill(null));},[qc]);
+
+  // 선생님 목록 로드
+  useEffect(()=>{
+    fetch(`${SHEETS_URL}?action=list_teachers`)
+      .then(r=>r.json()).then(d=>{if(d.result==="ok")setTeacherList(d.teachers||[]);}).catch(()=>{});
+  },[]);
+
+  // 과목에 맞는 선생님 목록 필터
+  const filteredTeachers=useMemo(()=>{
+    if(!sub)return teacherList;
+    return teacherList.filter(t=>t.subject===sub||!t.subject);
+  },[teacherList,sub]);
 
   // 객관식 버튼 토글: 같은 값 재클릭 시 해제, 다른 값 클릭 시 복수정답 추가
   const hAns=useCallback((i,v)=>{setAns(p=>{
@@ -188,10 +227,13 @@ export default function App(){
     if(!nm.trim())return alert("이름을 입력하세요.");
     if(!/^\d{4}$/.test(ph))return alert("핸드폰 뒷 4자리를 입력하세요.");
     if(!sub)return alert("과목을 선택하세요.");
-    if(!gr)return alert("학년을 선택하세요.");if(!lv)return alert("레벨을 선택하세요.");
+    if(!gr)return alert("학년을 선택하세요.");
+    if(!selTeacher)return alert("선생님을 선택하세요.");
     lsSet({nm:nm.trim(),ph});
     setLoadingExams(true);setTodayExams(null);
-    fetch(`${SHEETS_URL}?action=list_exams_today&subject=${encodeURIComponent(sub)}&grade=${encodeURIComponent(gr)}&level=${encodeURIComponent(lv)}&date=${encodeURIComponent(pd)}`)
+    // 선생님 이름으로 검색 (레벨은 선택이면 추가, 없으면 전체)
+    const params=new URLSearchParams({action:"list_exams_today",subject:sub,grade:gr,level:lv||"전체",date:pd,teacher:selTeacher});
+    fetch(`${SHEETS_URL}?${params.toString()}`)
       .then(r=>r.json()).then(d=>{setTodayExams(d.exams||[]);setLoadingExams(false);}).catch(()=>{setTodayExams([]);setLoadingExams(false);});
   };
   const hPickExam=(ex)=>{
@@ -200,6 +242,31 @@ export default function App(){
     const qTotal=Number(ex.totalQuestions)||100;setTq(qTotal);setCq("");
     setAns(Array(qTotal).fill(null));setScr("input");setALoad(false);setANF(false);
     setAKey(ex.answers||null);setTKey(ex.types||null);
+    // 비순차 번호 지원: questionNumberMap = {"1":"182","2":"183",...} 또는 startNumber = 182
+    if(ex.questionNumberMap){
+      setQNumMap(ex.questionNumberMap);
+    }else if(ex.startNumber&&Number(ex.startNumber)>1){
+      // startNumber로부터 순차 맵 자동 생성
+      const m={};for(let i=1;i<=qTotal;i++)m[String(i)]=String(Number(ex.startNumber)+i-1);
+      setQNumMap(m);
+    }else{
+      // answers 키 분석: 모든 키가 숫자이고 1이 아닌 곳에서 시작하면 자동 감지
+      const keys=ex.answers?Object.keys(ex.answers).map(Number).filter(n=>!isNaN(n)).sort((a,b)=>a-b):[];
+      if(keys.length>0&&keys[0]>1){
+        const m={};for(let i=0;i<keys.length;i++)m[String(i+1)]=String(keys[i]);
+        setQNumMap(m);
+        // answers/types 키도 재매핑 (원래 키→순차 키)
+        const remappedAns={},remappedTypes={};
+        keys.forEach((k,i)=>{
+          if(ex.answers[String(k)]!==undefined)remappedAns[String(i+1)]=ex.answers[String(k)];
+          if(ex.types&&ex.types[String(k)]!==undefined)remappedTypes[String(i+1)]=ex.types[String(k)];
+        });
+        setAKey(remappedAns);setTKey(Object.keys(remappedTypes).length>0?remappedTypes:null);
+        setTq(keys.length);setCq("");setAns(Array(keys.length).fill(null));
+      }else{
+        setQNumMap(null);
+      }
+    }
     if(ex.answers)setALoad(true);else setANF(true);
   };
   const hShowHistory=()=>{
@@ -221,12 +288,15 @@ export default function App(){
     try{await fetch(SHEETS_URL,{method:"POST",mode:"no-cors",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({action:"student_answer",name:nm,phone:ph,className:cn,subject:sub,grade:gr,level:lv,examName:et,date:ds,
         totalGraded:r?r.to+r.sc:ac,score:r?r.score:null,correct:r?r.oc:null,wrong:r?r.ow:null,
-        wrongQuestions:r?r.det.filter(d=>d.r==="오답").map(d=>d.q):[],answers:ansSerialized})});
+        subPending:r?r.subPending:0,
+        wrongQuestions:r?r.det.filter(d=>d.r==="오답").map(d=>d.q):[],
+        pendingQuestions:r?r.det.filter(d=>d.r==="채점중").map(d=>d.q):[],
+        answers:ansSerialized})});
       setSendOk(true);}catch(e){setSendOk(false);}
     setSending(false);setScr("result");
   };
 
-  const hReset=()=>{setAns(Array(qc).fill(null));setRes(null);setWo(false);setSendOk(null);setScr("info");setSec(0);setNm("");setSub("");setGr("");setLv("");setEt("");setAKey(null);setTKey(null);setALoad(false);setANF(false);setTq(100);setCq("");setPd(todayIso());setTodayExams(null);};
+  const hReset=()=>{setAns(Array(qc).fill(null));setRes(null);setWo(false);setSendOk(null);setScr("info");setSec(0);setNm("");setSub("");setGr("");setLv("");setEt("");setSelTeacher("");setAKey(null);setTKey(null);setQNumMap(null);setALoad(false);setANF(false);setTq(100);setCq("");setPd(todayIso());setTodayExams(null);};
   const hRetry=()=>{setAns(Array(qc).fill(null));setRes(null);setWo(false);setSendOk(null);setScr("input");setSec(0);};
   const scTo=(i)=>{setSec(i);sRefs.current[i]?.scrollIntoView({behavior:"smooth",block:"start"});};
   const goUA=()=>{const i=ans.findIndex(a=>a===null||a==="");if(i===-1)return alert("모든 문항에 답했습니다!");setSec(Math.floor(i/SEC));setTimeout(()=>{document.getElementById(`q-${i}`)?.scrollIntoView({behavior:"smooth",block:"center"});},100);};
@@ -252,8 +322,18 @@ export default function App(){
           <div style={{marginBottom:14}}><div style={S.label}>핸드폰 뒷 4자리 <span style={{color:T.danger}}>*</span></div><input style={S.inp} placeholder="예: 1234" value={ph} onChange={e=>setPh(e.target.value.replace(/[^0-9]/g,"").slice(0,4))} inputMode="numeric" maxLength={4}/></div>
           <Chip label="과목" req opts={SUBJECTS} val={sub} onChange={setSub}/>
           <Chip label="학년" req opts={GRADES} val={gr} onChange={setGr}/>
-          <Chip label="레벨" req opts={LEVELS} val={lv} onChange={setLv} custom/>
-          {cn&&<div style={S.clPrev}><span style={{fontSize:12,color:T.textMuted}}>반 이름</span><span style={{fontSize:15,fontWeight:700,color:T.goldDark}}>{cn}</span></div>}
+          <Chip label="레벨" opts={LEVELS} val={lv} onChange={setLv} custom/>
+          {/* 선생님 선택 드롭다운 */}
+          <div style={{marginBottom:14}}>
+            <div style={S.label}>선생님 <span style={{color:T.danger}}>*</span></div>
+            {filteredTeachers.length>0?(
+              <select style={S.inp} value={selTeacher} onChange={e=>setSelTeacher(e.target.value)}>
+                <option value="">-- 선생님을 선택하세요 --</option>
+                {filteredTeachers.map(t=>(<option key={t.name} value={t.name}>{t.name}{t.subject?` (${t.subject})`:""}</option>))}
+              </select>
+            ):(<input style={S.inp} placeholder="선생님 이름 입력" value={selTeacher} onChange={e=>setSelTeacher(e.target.value)}/>)}
+          </div>
+          {cn&&<div style={S.clPrev}><span style={{fontSize:12,color:T.textMuted}}>반 이름</span><span style={{fontSize:15,fontWeight:700,color:T.goldDark}}>{cn}{selTeacher?` · ${selTeacher} 선생님`:""}</span></div>}
           <div style={{marginBottom:14}}>
             <div style={S.label}>시험 날짜 <span style={{color:T.danger}}>*</span></div>
             <input type="date" style={S.inp} value={pd} onChange={e=>{setPd(e.target.value||todayIso());setTodayExams(null);}}/>
@@ -270,7 +350,7 @@ export default function App(){
               <>
                 <div style={{fontSize:12,fontWeight:700,color:T.goldDeep,marginBottom:8}}>{ds} {cn} 시험 ({todayExams.length}개)</div>
                 {todayExams.map((ex,i)=>(<button key={i} onClick={()=>hPickExam(ex)} style={{width:"100%",padding:"12px 14px",marginBottom:6,background:T.goldLight,border:`1.5px solid ${T.goldMuted}`,borderRadius:10,cursor:"pointer",fontFamily:"inherit",textAlign:"left",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <div><div style={{fontSize:14,fontWeight:700,color:T.goldDeep}}>{ex.examType}{ex.round?` · ${ex.round}`:""}</div><div style={{fontSize:11,color:T.textMuted,marginTop:2}}>{ex.totalQuestions}문항</div></div>
+                  <div><div style={{fontSize:14,fontWeight:700,color:T.goldDeep}}>{ex.examType}{ex.round?` · ${ex.round}`:""}</div><div style={{fontSize:11,color:T.textMuted,marginTop:2}}>{ex.totalQuestions}문항{ex.examTime?` · ${ex.examTime}`:ex.regTime?` · ${ex.regTime}`:""}{ex.teacher?` · ${ex.teacher} 선생님`:""}</div></div>
                   <div style={{fontSize:18,color:T.goldDark}}>→</div>
                 </button>))}
               </>)}
@@ -317,12 +397,13 @@ export default function App(){
         <div style={S.qkR}><button style={S.qkB} onClick={goUA}>⚡ 빈 문항 이동</button><button style={{...S.qkB,color:T.danger,background:T.dangerLight}} onClick={clrAll}>↺ 초기화</button></div>
 
         <div style={S.qLW}>{secs.map((s,si)=>(<div key={si} ref={el=>sRefs.current[si]=el}>
-          <div style={S.secH}><span style={S.secTi}>{s.label}번</span><span style={S.secC}>{ss[si].done}/{ss[si].total}</span></div>
+          <div style={S.secH}><span style={S.secTi}>{qNumMap?`${qNumMap[String(s.start)]||s.start}–${qNumMap[String(s.end)]||s.end}`:s.label}번</span><span style={S.secC}>{ss[si].done}/{ss[si].total}</span></div>
           {Array.from({length:s.end-s.start+1},(_,j)=>{const qi=s.start-1+j,sel=ans[qi],_tv=tKey?(tKey[String(qi+1)]??tKey[qi+1]??tKey[qi]):null,isSub=_tv==="sub",fi=isFilled(sel);
             const selArr=Array.isArray(sel)?sel:(sel!==null&&sel!==""&&sel!==undefined&&typeof sel!=="string"?[Number(sel)]:[]);
             const multi=selArr.length>1;
             // 주관식: 정답키에 파이프가 있으면 복수 blank (N개 입력란)
-            const keyVal=isSub&&aKey?(aKey[String(qi+1)]??aKey[qi+1]??""):"";
+            const rawKeyVal=isSub&&aKey?(aKey[String(qi+1)]??aKey[qi+1]??""):"";
+            const keyVal=isSub?normalizeSubKey(rawKeyVal):rawKeyVal;
             const nBlanks=isSub&&typeof keyVal==="string"&&keyVal.indexOf("|")!==-1?keyVal.split("|").length:1;
             const subStr=isSub?(typeof sel==="string"?sel:""):"";
             const subParts=isSub?subStr.split("|"):[];
@@ -330,7 +411,7 @@ export default function App(){
             const updateBlank=(idx,val)=>{const np=[...subParts];np[idx]=val;hSub(qi,np.slice(0,nBlanks).join("|"));};
             return(<div key={qi} id={`q-${qi}`} style={{...S.qR,borderLeft:fi?`3px solid ${isSub?T.accent:T.gold}`:`3px solid transparent`,background:fi?(isSub?T.accentLight+"66":T.goldPale):T.white,flexDirection:isSub&&nBlanks>1?"column":"row",alignItems:isSub&&nBlanks>1?"stretch":"center"}}>
               <div style={{display:"flex",alignItems:"center",width:"100%"}}>
-                <div style={{...S.qN,background:fi?(isSub?T.accent:T.gold):T.borderLight,color:fi?T.white:T.textMuted}}>{qi+1}</div>
+                <div style={{...S.qN,background:fi?(isSub?T.accent:T.gold):T.borderLight,color:fi?T.white:T.textMuted,fontSize:qNumMap&&qNumMap[String(qi+1)]&&String(qNumMap[String(qi+1)]).length>2?9:11}}>{qNumMap?qNumMap[String(qi+1)]||qi+1:qi+1}</div>
                 {isSub?(<div style={{flex:1,display:"flex",alignItems:"center",gap:6}}>
                   <span style={{fontSize:10,fontWeight:700,color:T.accent,background:T.accentLight,padding:"2px 6px",borderRadius:4}}>주관식{nBlanks>1?` ${nBlanks}개`:""}</span>
                   {nBlanks===1?(<input style={S.sInp} placeholder="답을 입력하세요" value={subStr} onChange={e=>hSub(qi,e.target.value)}/>):null}
@@ -366,7 +447,7 @@ export default function App(){
             <div style={{fontSize:13,opacity:.9}}>{nm} · {cn}</div>
             <div style={{fontSize:56,fontWeight:800,lineHeight:1.1,margin:"4px 0"}}>{res.score}<span style={{fontSize:22}}>점</span></div>
             <div style={{fontSize:13,opacity:.85,marginBottom:4}}>{et} · {ds}</div>
-            <div style={{fontSize:12,opacity:.7,marginBottom:8}}>객관식 {res.oc}/{res.totalObj}정답{res.subPartial>0?` · 주관식 +${res.subPartial}점 (부분점수)`:""}{res.totalSub>0?` · 주관식 ${res.totalSub}문항`:""}</div>
+            <div style={{fontSize:12,opacity:.7,marginBottom:8}}>객관식 {res.oc}/{res.totalObj}정답{res.totalSub>0?` · 주관식 ${res.totalSub}문항`:""}{res.subPending>0?` (⏳ ${res.subPending}문항 채점중)`:""}</div>
             <div style={S.scFB}>{res.score>=90?"🎉 훌륭합니다!":res.score>=70?"💪 잘했어요!":"📚 오답을 복습하세요!"}</div>
           </div>
           <div style={{padding:"10px 14px",borderRadius:10,marginBottom:14,fontSize:13,fontWeight:600,textAlign:"center",background:sendOk!==false?T.accentLight:T.dangerLight,color:sendOk!==false?T.accent:T.danger}}>{sendOk!==false?"✅ 결과가 선생님에게 전송되었습니다":"⚠️ 전송 실패"}</div>
@@ -378,7 +459,7 @@ export default function App(){
               <div style={S.tH}><span style={{flex:"0 0 36px",textAlign:"center"}}>#</span><span style={{flex:"0 0 36px",textAlign:"center"}}>유형</span><span style={{flex:1,textAlign:"center"}}>내 답</span><span style={{flex:1,textAlign:"center"}}>정답</span><span style={{flex:"0 0 40px",textAlign:"center"}}>결과</span></div>
               {res.det.filter(d=>wo?d.r==="오답"||d.r==="부분정답":true).map(d=>(
                 <div key={d.q} style={{...S.tR,background:d.r==="정답"?"#F1F8E9":d.r==="오답"?"#FFF5F5":d.r==="부분정답"?"#FFF8E1":T.goldPale}}>
-                  <span style={{flex:"0 0 36px",textAlign:"center",fontWeight:700,fontSize:12,color:T.textSub}}>{d.q}</span>
+                  <span style={{flex:"0 0 36px",textAlign:"center",fontWeight:700,fontSize:qNumMap?10:12,color:T.textSub}}>{qNumMap?qNumMap[String(d.q)]||d.q:d.q}</span>
                   <span style={{flex:"0 0 36px",textAlign:"center",fontSize:10,fontWeight:700,color:d.t==="sub"?T.accent:T.goldDark}}>{d.t==="sub"?"주관":"객관"}</span>
                   <span style={{flex:1,textAlign:"center",fontWeight:600,fontSize:13,color:T.text,wordBreak:"break-word",padding:"0 4px"}}>{d.t==="sub"?(d.s||"–"):vl(d.s)}</span>
                   <span style={{flex:1,textAlign:"center",fontWeight:600,fontSize:13,color:T.goldDark,wordBreak:"break-word",padding:"0 4px"}}>{d.t==="sub"?(d.c||"–"):vl(d.c)}</span>
