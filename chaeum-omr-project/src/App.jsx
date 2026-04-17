@@ -169,7 +169,7 @@ export default function App(){
   const _ls=lsGet();
   const[nm,setNm]=useState(_ls.nm||"");
   const[ph,setPh]=useState(_ls.ph||"");
-  const[sub,setSub]=useState("");const[gr,setGr]=useState("");const[lv,setLv]=useState("");const[et,setEt]=useState("");
+  const[sub,setSub]=useState("");const[gr,setGr]=useState("");const[lv,setLv]=useState("");const[et,setEt]=useState("");const[exSub,setExSub]=useState("");const[exLv,setExLv]=useState("");
   const[pd,setPd]=useState(todayIso());
   const[todayExams,setTodayExams]=useState(null);const[loadingExams,setLoadingExams]=useState(false);
   const[teacherList,setTeacherList]=useState([]);const[selTeacher,setSelTeacher]=useState("");
@@ -181,7 +181,8 @@ export default function App(){
   const[aKey,setAKey]=useState(null);const[tKey,setTKey]=useState(null);const[qNumMap,setQNumMap]=useState(null);const[aLoad,setALoad]=useState(false);const[aNF,setANF]=useState(false);
   const[sending,setSending]=useState(false);const[sendOk,setSendOk]=useState(null);
 
-  const cn=(sub&&gr&&lv)?`${sub} ${gr} ${lv}반`:"";
+  // className: 시험 선택 시 ex.className 사용, 없으면 학년+선생님으로 생성
+  const cn=exSub?`${exSub} ${gr} ${exLv}반`:(gr?`${gr}`:"")
   const ds=isoToDot(pd);
   const isToday=pd===todayIso();
   const secs=useMemo(()=>getSecs(qc),[qc]);
@@ -197,11 +198,8 @@ export default function App(){
       .then(r=>r.json()).then(d=>{if(d.result==="ok")setTeacherList(d.teachers||[]);}).catch(()=>{});
   },[]);
 
-  // 과목에 맞는 선생님 목록 필터
-  const filteredTeachers=useMemo(()=>{
-    if(!sub)return teacherList;
-    return teacherList.filter(t=>t.subject===sub||!t.subject);
-  },[teacherList,sub]);
+  // 선생님 목록 (과목 필터 없이 전체)
+  const filteredTeachers=teacherList;
 
   // 객관식 버튼 토글: 같은 값 재클릭 시 해제, 다른 값 클릭 시 복수정답 추가
   const hAns=useCallback((i,v)=>{setAns(p=>{
@@ -226,17 +224,22 @@ export default function App(){
   const hLookupExams=()=>{
     if(!nm.trim())return alert("이름을 입력하세요.");
     if(!/^\d{4}$/.test(ph))return alert("핸드폰 뒷 4자리를 입력하세요.");
-    if(!sub)return alert("과목을 선택하세요.");
     if(!gr)return alert("학년을 선택하세요.");
     if(!selTeacher)return alert("선생님을 선택하세요.");
     lsSet({nm:nm.trim(),ph});
     setLoadingExams(true);setTodayExams(null);
-    // 선생님 이름으로 검색 (레벨은 선택이면 추가, 없으면 전체)
-    const params=new URLSearchParams({action:"list_exams_today",subject:sub,grade:gr,level:lv||"전체",date:pd,teacher:selTeacher});
+    // 학년 + 선생님 + 날짜로 검색 (과목/레벨은 전체)
+    const params=new URLSearchParams({action:"list_exams_today",subject:"",grade:gr,level:"전체",date:pd,teacher:selTeacher});
     fetch(`${SHEETS_URL}?${params.toString()}`)
       .then(r=>r.json()).then(d=>{setTodayExams(d.exams||[]);setLoadingExams(false);}).catch(()=>{setTodayExams([]);setLoadingExams(false);});
   };
   const hPickExam=(ex)=>{
+    // 시험에서 과목/레벨 정보 가져오기 (className에서 추출하거나, 시험 데이터에서)
+    if(ex.className){
+      const parts=ex.className.split(/\s+/);
+      setSub(parts[0]||"");setLv((parts[2]||"").replace(/반$/,"")||"");
+      setExSub(parts[0]||"");setExLv((parts[2]||"").replace(/반$/,"")||"");
+    }
     // 차수가 있으면 시험명에 " (1차)" 같이 붙여서 선생님 대시보드·기록에서도 구분되도록
     setEt(ex.examType + (ex.round?` (${ex.round})`:""));
     const qTotal=Number(ex.totalQuestions)||100;setTq(qTotal);setCq("");
@@ -306,7 +309,7 @@ export default function App(){
     <div style={S.app}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap');*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}body{font-family:'Noto Sans KR',-apple-system,sans-serif;background:${T.bg}}input:focus{outline:none;border-color:${T.gold}!important;box-shadow:0 0 0 3px ${T.goldLight}!important}@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}@keyframes scaleIn{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}@keyframes spin{to{transform:rotate(360deg)}}.fade-up{animation:fadeUp .3s ease-out}.scale-in{animation:scaleIn .2s ease-out}::-webkit-scrollbar{width:3px;height:3px}::-webkit-scrollbar-thumb{background:${T.border};border-radius:3px}`}</style>
 
-      <header style={S.hdr}><div style={S.hdrIn}><div style={S.logoR}><div style={S.logoM}>채움</div><div><div style={S.hdrT}>채움학원</div><div style={S.hdrS}>답안 제출 시스템</div></div></div>{scr==="input"&&<div style={S.hdrB}>{nm} · {cn}</div>}</div></header>
+      <header style={S.hdr}><div style={S.hdrIn}><div style={S.logoR}><div style={S.logoM}>채움</div><div><div style={S.hdrT}>채움학원</div><div style={S.hdrS}>답안 제출 시스템</div></div></div>{scr==="input"&&<div style={S.hdrB}>{nm} · {cn||`${gr} ${selTeacher} 선생님`}</div>}</div></header>
 
       {/* ═══ 탭 전환 ═══ */}
       {scr==="info"&&(<div style={{display:"flex",gap:6,padding:"10px 14px 0"}}>
@@ -320,9 +323,7 @@ export default function App(){
         <div style={S.card}>
           <div style={{marginBottom:14}}><div style={S.label}>이름 <span style={{color:T.danger}}>*</span></div><input style={S.inp} placeholder="이름을 입력하세요" value={nm} onChange={e=>setNm(e.target.value)}/></div>
           <div style={{marginBottom:14}}><div style={S.label}>핸드폰 뒷 4자리 <span style={{color:T.danger}}>*</span></div><input style={S.inp} placeholder="예: 1234" value={ph} onChange={e=>setPh(e.target.value.replace(/[^0-9]/g,"").slice(0,4))} inputMode="numeric" maxLength={4}/></div>
-          <Chip label="과목" req opts={SUBJECTS} val={sub} onChange={setSub}/>
           <Chip label="학년" req opts={GRADES} val={gr} onChange={setGr}/>
-          <Chip label="레벨" opts={LEVELS} val={lv} onChange={setLv} custom/>
           {/* 선생님 선택 드롭다운 */}
           <div style={{marginBottom:14}}>
             <div style={S.label}>선생님 <span style={{color:T.danger}}>*</span></div>
@@ -333,7 +334,6 @@ export default function App(){
               </select>
             ):(<input style={S.inp} placeholder="선생님 이름 입력" value={selTeacher} onChange={e=>setSelTeacher(e.target.value)}/>)}
           </div>
-          {cn&&<div style={S.clPrev}><span style={{fontSize:12,color:T.textMuted}}>반 이름</span><span style={{fontSize:15,fontWeight:700,color:T.goldDark}}>{cn}{selTeacher?` · ${selTeacher} 선생님`:""}</span></div>}
           <div style={{marginBottom:14}}>
             <div style={S.label}>시험 날짜 <span style={{color:T.danger}}>*</span></div>
             <input type="date" style={S.inp} value={pd} onChange={e=>{setPd(e.target.value||todayIso());setTodayExams(null);}}/>
@@ -346,9 +346,9 @@ export default function App(){
           </div>
           <button style={S.btnG} onClick={hLookupExams} disabled={loadingExams}>{loadingExams?"시험 찾는 중...":(isToday?"🔍 오늘의 시험 찾기":`🔍 ${ds} 시험 찾기`)}</button>
           {todayExams!==null&&(<div style={{marginTop:14}}>
-            {todayExams.length===0?(<div style={{padding:"14px",background:T.dangerLight,borderRadius:10,color:T.danger,fontSize:13,fontWeight:600,textAlign:"center"}}>{ds} {cn}에서 등록된 시험이 없습니다.<br/>선생님께 문의하세요.</div>):(
+            {todayExams.length===0?(<div style={{padding:"14px",background:T.dangerLight,borderRadius:10,color:T.danger,fontSize:13,fontWeight:600,textAlign:"center"}}>{ds} {gr} {selTeacher} 선생님 시험이 없습니다.<br/>선생님께 문의하세요.</div>):(
               <>
-                <div style={{fontSize:12,fontWeight:700,color:T.goldDeep,marginBottom:8}}>{ds} {cn} 시험 ({todayExams.length}개)</div>
+                <div style={{fontSize:12,fontWeight:700,color:T.goldDeep,marginBottom:8}}>{ds} {gr} {selTeacher} 선생님 시험 ({todayExams.length}개)</div>
                 {todayExams.map((ex,i)=>(<button key={i} onClick={()=>hPickExam(ex)} style={{width:"100%",padding:"12px 14px",marginBottom:6,background:T.goldLight,border:`1.5px solid ${T.goldMuted}`,borderRadius:10,cursor:"pointer",fontFamily:"inherit",textAlign:"left",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <div><div style={{fontSize:14,fontWeight:700,color:T.goldDeep}}>{ex.examType}{ex.round?` · ${ex.round}`:""}</div><div style={{fontSize:11,color:T.textMuted,marginTop:2}}>{ex.totalQuestions}문항{ex.examTime?` · ${ex.examTime}`:ex.regTime?` · ${ex.regTime}`:""}{ex.teacher?` · ${ex.teacher} 선생님`:""}</div></div>
                   <div style={{fontSize:18,color:T.goldDark}}>→</div>
