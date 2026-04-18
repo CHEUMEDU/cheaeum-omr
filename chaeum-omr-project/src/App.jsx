@@ -350,7 +350,7 @@ export default function App(){
               <>
                 <div style={{fontSize:12,fontWeight:700,color:T.goldDeep,marginBottom:8}}>{ds} {gr} {selTeacher} 선생님 시험 ({todayExams.length}개)</div>
                 {todayExams.map((ex,i)=>{const classLabel=[ex.subject,ex.grade,ex.level?(ex.level+"반"):ex.className?"("+ex.className+")":""].filter(Boolean).join(" ");return(<button key={i} onClick={()=>hPickExam(ex)} style={{width:"100%",padding:"12px 14px",marginBottom:6,background:T.goldLight,border:`1.5px solid ${T.goldMuted}`,borderRadius:10,cursor:"pointer",fontFamily:"inherit",textAlign:"left",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <div>{classLabel&&<div style={{fontSize:16,fontWeight:800,color:T.goldDeep}}>{classLabel}</div>}<div style={{fontSize:12,fontWeight:600,color:T.goldDark,marginTop:2}}>{ex.examType}{ex.round?` · ${ex.round}`:""}</div><div style={{fontSize:11,color:T.textMuted,marginTop:2}}>{ex.totalQuestions}문항{ex.examTime?` · ${ex.examTime}`:ex.regTime?` · ${ex.regTime}`:""}</div></div>
+                  <div><div style={{fontSize:14,fontWeight:700,color:T.goldDeep}}>{ex.examType}{ex.round?` · ${ex.round}`:""}</div>{classLabel&&<div style={{fontSize:12,fontWeight:600,color:T.goldDark,marginTop:2}}>{classLabel}</div>}<div style={{fontSize:11,color:T.textMuted,marginTop:2}}>{ex.totalQuestions}문항{ex.examTime?` · ${ex.examTime}`:ex.regTime?` · ${ex.regTime}`:""}</div></div>
                   <div style={{fontSize:18,color:T.goldDark}}>→</div>
                 </button>);})}
               </>)}
@@ -392,12 +392,12 @@ export default function App(){
           <div style={{display:"flex",alignItems:"center",gap:4,marginTop:5}}><span style={{fontWeight:700,color:T.goldDark,fontSize:13}}>{ac}</span><span style={{color:T.textMuted,fontSize:13}}>/{qc}</span>
             <span style={{marginLeft:"auto",fontSize:12,fontWeight:600,color:ac===qc?T.accent:T.textMuted}}>{ac===qc?"✓ 완료":`${qc-ac}문항 남음`}</span></div></div>
 
-        <div style={S.secTA}><div style={S.secTS}>{ss.map((s,i)=>{const a=i===sec,d=s.done===s.total;return(<button key={i} onClick={()=>scTo(i)} style={{...S.secT,background:a?T.goldDark:d?T.accentLight:T.white,color:a?T.white:d?T.accent:T.textSub,borderColor:a?T.goldDark:d?T.accent:T.border,fontWeight:a?700:500}}><span style={{fontSize:qNumMap?10:12}}>{qNumMap?`${qNumMap[String(s.start)]||s.start}–${qNumMap[String(s.end)]||s.end}`:s.label}</span><span style={{fontSize:10,opacity:.8}}>{d?"✓":`${s.done}/${s.total}`}</span></button>);})}</div></div>
+        <div style={S.secTA}><div style={S.secTS}>{ss.map((s,i)=>{const a=i===sec,d=s.done===s.total;return(<button key={i} onClick={()=>scTo(i)} style={{...S.secT,background:a?T.goldDark:d?T.accentLight:T.white,color:a?T.white:d?T.accent:T.textSub,borderColor:a?T.goldDark:d?T.accent:T.border,fontWeight:a?700:500}}><span style={{fontSize:12}}>{s.label}</span><span style={{fontSize:10,opacity:.8}}>{d?"✓":`${s.done}/${s.total}`}</span></button>);})}</div></div>
 
         <div style={S.qkR}><button style={S.qkB} onClick={goUA}>⚡ 빈 문항 이동</button><button style={{...S.qkB,color:T.danger,background:T.dangerLight}} onClick={clrAll}>↺ 초기화</button></div>
 
         <div style={S.qLW}>{secs.map((s,si)=>(<div key={si} ref={el=>sRefs.current[si]=el}>
-          <div style={S.secH}><span style={S.secTi}>{qNumMap?`${qNumMap[String(s.start)]||s.start}(${s.start})–${qNumMap[String(s.end)]||s.end}(${s.end})`:s.label}번</span><span style={S.secC}>{ss[si].done}/{ss[si].total}</span></div>
+          <div style={S.secH}><span style={S.secTi}>{qNumMap?`${qNumMap[String(s.start)]||s.start}–${qNumMap[String(s.end)]||s.end}`:s.label}번</span><span style={S.secC}>{ss[si].done}/{ss[si].total}</span></div>
           {Array.from({length:s.end-s.start+1},(_,j)=>{const qi=s.start-1+j,sel=ans[qi],_tv=tKey?(tKey[String(qi+1)]??tKey[qi+1]??tKey[qi]):null,isSub=_tv==="sub",fi=isFilled(sel);
             const selArr=Array.isArray(sel)?sel:(sel!==null&&sel!==""&&sel!==undefined&&typeof sel!=="string"?[Number(sel)]:[]);
             const multi=selArr.length>1;
@@ -411,7 +411,7 @@ export default function App(){
             const updateBlank=(idx,val)=>{const np=[...subParts];np[idx]=val;hSub(qi,np.slice(0,nBlanks).join("|"));};
             return(<div key={qi} id={`q-${qi}`} style={{...S.qR,borderLeft:fi?`3px solid ${isSub?T.accent:T.gold}`:`3px solid transparent`,background:fi?(isSub?T.accentLight+"66":T.goldPale):T.white,flexDirection:isSub&&nBlanks>1?"column":"row",alignItems:isSub&&nBlanks>1?"stretch":"center"}}>
               <div style={{display:"flex",alignItems:"center",width:"100%"}}>
-                <div style={{...S.qN,background:fi?(isSub?T.accent:T.gold):T.borderLight,color:fi?T.white:T.textMuted,fontSize:qNumMap&&qNumMap[String(qi+1)]?9:11,minWidth:qNumMap?36:28,flexDirection:"column",lineHeight:1.1,padding:"2px 3px"}}>{qNumMap&&qNumMap[String(qi+1)]?<>{qNumMap[String(qi+1)]}<span style={{fontSize:7,opacity:.7}}>({qi+1})</span></>:qi+1}</div>
+                <div style={{...S.qN,background:fi?(isSub?T.accent:T.gold):T.borderLight,color:fi?T.white:T.textMuted,fontSize:qNumMap&&qNumMap[String(qi+1)]&&String(qNumMap[String(qi+1)]).length>2?9:11}}>{qNumMap?qNumMap[String(qi+1)]||qi+1:qi+1}</div>
                 {isSub?(<div style={{flex:1,display:"flex",alignItems:"center",gap:6}}>
                   <span style={{fontSize:10,fontWeight:700,color:T.accent,background:T.accentLight,padding:"2px 6px",borderRadius:4}}>주관식{nBlanks>1?` ${nBlanks}개`:""}</span>
                   {nBlanks===1?(<input style={S.sInp} placeholder="답을 입력하세요" value={subStr} onChange={e=>hSub(qi,e.target.value)}/>):null}
