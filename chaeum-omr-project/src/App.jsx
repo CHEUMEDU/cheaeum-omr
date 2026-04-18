@@ -142,14 +142,12 @@ function grade(ans,key,types,totalQ){
     }
   }
   const to=oc+ow;
-  // 점수: 객관식만 즉시 채점, 주관식은 "채점중" (완전 일치만 즉시 정답)
-  // 주관식 채점중 문항 수
+  // 점수: 전체 문항(N) 대비 정답 수로 계산 (미입력 = 오답 처리)
   const subPending=det.filter(d=>d.t==="sub"&&d.r==="채점중").length;
   const subCorrect=det.filter(d=>d.t==="sub"&&d.r==="정답").length;
-  // 분모: 객관식 전체 + 즉시 정답 처리된 주관식만
-  const denom=totalObj+subCorrect+subPending;
+  // 분모: 전체 문항 수 (100문제 중 10개만 맞으면 10점)
   const num=oc+subPartialSum;
-  const score=denom>0?Math.round((num/denom)*100):0;
+  const score=N>0?Math.round((num/N)*100):0;
   return{oc,ow,sc,to,totalObj,totalSub,totalQ:N,subPartial:Math.round(subPartialSum*100)/100,subPending,subCorrect,score,det};
 }
 
@@ -198,8 +196,7 @@ export default function App(){
       .then(r=>r.json()).then(d=>{if(d.result==="ok")setTeacherList(d.teachers||[]);}).catch(()=>{});
   },[]);
 
-  // 선생님 목록 (과목 필터 없이 전체)
-  const filteredTeachers=teacherList;
+  // 선생님 목록은 teacherList 직접 사용 (과목별 optgroup 분류)
 
   // 객관식 버튼 토글: 같은 값 재클릭 시 해제, 다른 값 클릭 시 복수정답 추가
   const hAns=useCallback((i,v)=>{setAns(p=>{
@@ -300,7 +297,6 @@ export default function App(){
   };
 
   const hReset=()=>{setAns(Array(qc).fill(null));setRes(null);setWo(false);setSendOk(null);setScr("info");setSec(0);setNm("");setSub("");setGr("");setLv("");setEt("");setSelTeacher("");setAKey(null);setTKey(null);setQNumMap(null);setALoad(false);setANF(false);setTq(100);setCq("");setPd(todayIso());setTodayExams(null);};
-  const hRetry=()=>{setAns(Array(qc).fill(null));setRes(null);setWo(false);setSendOk(null);setScr("input");setSec(0);};
   const scTo=(i)=>{setSec(i);sRefs.current[i]?.scrollIntoView({behavior:"smooth",block:"start"});};
   const goUA=()=>{const i=ans.findIndex(a=>a===null||a==="");if(i===-1)return alert("모든 문항에 답했습니다!");setSec(Math.floor(i/SEC));setTimeout(()=>{document.getElementById(`q-${i}`)?.scrollIntoView({behavior:"smooth",block:"center"});},100);};
   const clrAll=()=>{if(window.confirm("모든 답안을 초기화할까요?"))setAns(Array(qc).fill(null));};
@@ -324,13 +320,20 @@ export default function App(){
           <div style={{marginBottom:14}}><div style={S.label}>이름 <span style={{color:T.danger}}>*</span></div><input style={S.inp} placeholder="이름을 입력하세요" value={nm} onChange={e=>setNm(e.target.value)}/></div>
           <div style={{marginBottom:14}}><div style={S.label}>핸드폰 뒷 4자리 <span style={{color:T.danger}}>*</span></div><input style={S.inp} placeholder="예: 1234" value={ph} onChange={e=>setPh(e.target.value.replace(/[^0-9]/g,"").slice(0,4))} inputMode="numeric" maxLength={4}/></div>
           <Chip label="학년" req opts={GRADES} val={gr} onChange={setGr}/>
-          {/* 선생님 선택 드롭다운 */}
+          {/* 선생님 선택 드롭다운 (과목별 분류) */}
           <div style={{marginBottom:14}}>
             <div style={S.label}>선생님 <span style={{color:T.danger}}>*</span></div>
-            {filteredTeachers.length>0?(
+            {teacherList.length>0?(
               <select style={S.inp} value={selTeacher} onChange={e=>setSelTeacher(e.target.value)}>
                 <option value="">-- 선생님을 선택하세요 --</option>
-                {filteredTeachers.map(t=>(<option key={t.name} value={t.name}>{t.name}{t.subject?` (${t.subject})`:""}</option>))}
+                {["국어","영어","수학","과학","사회"].map(subj=>{
+                  const subTeachers=teacherList.filter(t=>t.subject===subj);
+                  if(subTeachers.length===0)return null;
+                  return(<optgroup key={subj} label={subj+"과"}>{subTeachers.map(t=>(<option key={t.name} value={t.name}>{t.name}</option>))}</optgroup>);
+                })}
+                {teacherList.filter(t=>!["국어","영어","수학","과학","사회"].includes(t.subject)).length>0&&(
+                  <optgroup label="기타">{teacherList.filter(t=>!["국어","영어","수학","과학","사회"].includes(t.subject)).map(t=>(<option key={t.name} value={t.name}>{t.name}</option>))}</optgroup>
+                )}
               </select>
             ):(<input style={S.inp} placeholder="선생님 이름 입력" value={selTeacher} onChange={e=>setSelTeacher(e.target.value)}/>)}
           </div>
@@ -447,11 +450,13 @@ export default function App(){
             <div style={{fontSize:13,opacity:.9}}>{nm} · {cn}</div>
             <div style={{fontSize:56,fontWeight:800,lineHeight:1.1,margin:"4px 0"}}>{res.score}<span style={{fontSize:22}}>점</span></div>
             <div style={{fontSize:13,opacity:.85,marginBottom:4}}>{et} · {ds}</div>
-            <div style={{fontSize:12,opacity:.7,marginBottom:8}}>객관식 {res.oc}/{res.totalObj}정답{res.totalSub>0?` · 주관식 ${res.totalSub}문항`:""}{res.subPending>0?` (⏳ ${res.subPending}문항 채점중)`:""}</div>
+            <div style={{fontSize:12,opacity:.7,marginBottom:8}}>전체 {res.totalQ}문항 중 {res.oc+res.subCorrect}개 정답 · {res.ow}개 오답 · {res.totalQ-(res.to+res.sc)}개 미입력{res.subPending>0?` · ⏳ ${res.subPending}문항 채점중`:""}</div>
             <div style={S.scFB}>{res.score>=90?"🎉 훌륭합니다!":res.score>=70?"💪 잘했어요!":"📚 오답을 복습하세요!"}</div>
           </div>
           <div style={{padding:"10px 14px",borderRadius:10,marginBottom:14,fontSize:13,fontWeight:600,textAlign:"center",background:sendOk!==false?T.accentLight:T.dangerLight,color:sendOk!==false?T.accent:T.danger}}>{sendOk!==false?"✅ 결과가 선생님에게 전송되었습니다":"⚠️ 전송 실패"}</div>
-          <div style={S.stRow}><SC i="✅" l="정답" v={res.oc} c={T.accent}/><SC i="❌" l="오답" v={res.ow} c={T.danger}/><SC i="📊" l="정답률" v={`${res.score}%`} c={T.goldDark}/>{res.sc>0&&<SC i="✍️" l="주관식" v={`${res.sc}`} c={T.textSub}/>}</div>
+          <div style={S.stRow}><SC i="✅" l="정답" v={res.oc} c={T.accent}/><SC i="❌" l="오답" v={res.ow} c={T.danger}/><SC i="📝" l="전체" v={res.totalQ} c={T.textSub}/><SC i="📊" l="점수" v={`${res.score}점`} c={T.goldDark}/>{res.sc>0&&<SC i="✍️" l="주관식" v={`${res.sc}`} c={T.textSub}/>}</div>
+          {/* 미입력 문항 안내 */}
+          {(res.totalQ-(res.to+res.sc))>0&&<div style={{padding:"8px 14px",borderRadius:10,marginBottom:10,fontSize:12,fontWeight:600,textAlign:"center",background:"#FFF3E0",color:"#E65100"}}>미입력 {res.totalQ-(res.to+res.sc)}문항은 0점 처리됩니다.</div>}
           <div style={S.card}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}><h3 style={{fontSize:15,fontWeight:700,color:T.text}}>정오표</h3>
               <button onClick={()=>setWo(!wo)} style={{padding:"5px 12px",fontSize:12,fontWeight:600,border:"none",borderRadius:6,cursor:"pointer",fontFamily:"inherit",background:wo?T.dangerLight:T.borderLight,color:wo?T.danger:T.textSub}}>{wo?"❌ 오답만":"전체 보기"}</button></div>
@@ -476,7 +481,12 @@ export default function App(){
             <div style={{padding:"10px 14px",borderRadius:10,marginBottom:20,fontSize:13,fontWeight:600,textAlign:"center",background:sendOk!==false?T.accentLight:T.dangerLight,color:sendOk!==false?T.accent:T.danger}}>{sendOk!==false?"✅ 답안이 전송되었습니다":"⚠️ 전송 실패"}</div>
           </div>
         )}
-        <div style={{display:"flex",gap:10,marginBottom:20}}><button style={S.btnO} onClick={hRetry}>↻ 다시 입력</button><button style={S.btnG} onClick={hReset}>처음으로</button></div>
+        {/* 복습 안내 + 새 시험 버튼 */}
+        {res&&res.ow>0&&<div style={{padding:"12px 16px",borderRadius:12,marginBottom:10,background:"#E8F5E9",border:`1px solid ${T.accent}`,textAlign:"center"}}>
+          <div style={{fontSize:13,fontWeight:700,color:T.accent,marginBottom:4}}>📖 오답 복습 안내</div>
+          <div style={{fontSize:12,color:T.textSub}}>틀린 문항을 위 정오표에서 확인하고 복습하세요!<br/>오답노트가 자동으로 만들어집니다.</div>
+        </div>}
+        <div style={{marginBottom:20}}><button style={S.btnG} onClick={hReset}>새 시험 보기</button></div>
       </div>)}
     </div>
   );
