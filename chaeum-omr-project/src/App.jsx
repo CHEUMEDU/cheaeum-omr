@@ -241,7 +241,16 @@ export default function App(){
     setEt(ex.examType + (ex.round?` (${ex.round})`:""));
     const qTotal=Number(ex.totalQuestions)||100;setTq(qTotal);setCq("");
     setAns(Array(qTotal).fill(null));setScr("input");setALoad(false);setANF(false);
-    setAKey(ex.answers||null);setTKey(ex.types||null);
+    // ★ 배열 형태 정답을 객체로 변환 (off-by-one 방지)
+    let fixedAnswers=ex.answers||null;
+    let fixedTypes=ex.types||null;
+    if(Array.isArray(fixedAnswers)){
+      const obj={};fixedAnswers.forEach((v,i)=>{obj[String(i+1)]=v;});fixedAnswers=obj;
+    }
+    if(Array.isArray(fixedTypes)){
+      const obj={};fixedTypes.forEach((v,i)=>{obj[String(i+1)]=v;});fixedTypes=obj;
+    }
+    setAKey(fixedAnswers);setTKey(fixedTypes);
     // 비순차 번호 지원: questionNumberMap = {"1":"182","2":"183",...} 또는 startNumber = 182
     if(ex.questionNumberMap){
       setQNumMap(ex.questionNumberMap);
