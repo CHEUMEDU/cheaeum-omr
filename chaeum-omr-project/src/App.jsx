@@ -258,6 +258,23 @@ export default function App(){
       const t=norm(selTeacher);
       exams=all.filter(e=>norm(e.teacher).indexOf(t)!==-1||t.indexOf(norm(e.teacher))!==-1);
     }
+    // ★ 클라이언트 중복 제거: 같은 (className + examType + setType + examDate) 중
+    //   regTime 이 가장 늦은(최신) 1건만 남김. (GS 재배포 전에도 작동)
+    try{
+      const dedup={};
+      const norm=(s)=>String(s||"").replace(/\s+/g,"");
+      for(const ex of exams){
+        const cn=norm(ex.className);
+        const key=cn
+          ?`${cn}|${ex.examType||""}|${ex.setType||ex.round||""}|${ex.examDate||""}`
+          :`_NOCN_|${norm(ex.level)}|${norm(ex.teacher)}|${ex.examType||""}|${ex.setType||ex.round||""}|${ex.examDate||""}`;
+        const prev=dedup[key];
+        if(!prev){dedup[key]=ex;continue;}
+        const a=String(prev.regTime||""),b=String(ex.regTime||"");
+        if(b>a)dedup[key]=ex; // 더 늦은 regTime 우선
+      }
+      exams=Object.values(dedup);
+    }catch(e){/* dedup 실패해도 원본 유지 */}
     setTodayExams(exams);setLoadingExams(false);
   };
   const hPickExam=(ex)=>{
