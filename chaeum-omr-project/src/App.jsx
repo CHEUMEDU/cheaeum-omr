@@ -258,22 +258,38 @@ export default function App(){
       const t=norm(selTeacher);
       exams=all.filter(e=>norm(e.teacher).indexOf(t)!==-1||t.indexOf(norm(e.teacher))!==-1);
     }
-    // ★ 클라이언트 중복 제거: 같은 (className + examType + setType + examDate) 중
-    //   regTime 이 가장 늦은(최신) 1건만 남김. (GS 재배포 전에도 작동)
+    // ★ 클라이언트 중복 제거: 2단계 전략
+    //   1차) 같은 (className + examType + setType + examDate) — 완전한 중복
+    //   2차) 같은 (teacher + subject + grade + examType + setType + examDate + examTime + 답안해시)
+    //        — 같은 시험지를 학교별로 따로 등록한 경우 (다중학교 마이그레이션 전까지)
     try{
-      const dedup={};
       const norm=(s)=>String(s||"").replace(/\s+/g,"");
+      const ansHash=(a)=>{
+        try{if(!a||typeof a!=="object")return"";const k=Object.keys(a).sort();return k.map(x=>x+":"+String(a[x])).join("|");}catch(e){return"";}
+      };
+      // 1차
+      const d1={};
       for(const ex of exams){
         const cn=norm(ex.className);
         const key=cn
           ?`${cn}|${ex.examType||""}|${ex.setType||ex.round||""}|${ex.examDate||""}`
           :`_NOCN_|${norm(ex.level)}|${norm(ex.teacher)}|${ex.examType||""}|${ex.setType||ex.round||""}|${ex.examDate||""}`;
-        const prev=dedup[key];
-        if(!prev){dedup[key]=ex;continue;}
+        const prev=d1[key];
+        if(!prev){d1[key]=ex;continue;}
         const a=String(prev.regTime||""),b=String(ex.regTime||"");
-        if(b>a)dedup[key]=ex; // 더 늦은 regTime 우선
+        if(b>a)d1[key]=ex;
       }
-      exams=Object.values(dedup);
+      const s1=Object.values(d1);
+      // 2차: 답안 시그니처 기반
+      const d2={};
+      for(const ex of s1){
+        const sig=[norm(ex.teacher),norm(ex.subject),norm(ex.grade),ex.examType||"",ex.setType||ex.round||"",ex.examDate||"",ex.examTime||"",ansHash(ex.answers)].join("#");
+        const prev=d2[sig];
+        if(!prev){d2[sig]=ex;continue;}
+        const a=String(prev.regTime||""),b=String(ex.regTime||"");
+        if(b>a)d2[sig]=ex;
+      }
+      exams=Object.values(d2);
     }catch(e){/* dedup 실패해도 원본 유지 */}
     setTodayExams(exams);setLoadingExams(false);
   };
