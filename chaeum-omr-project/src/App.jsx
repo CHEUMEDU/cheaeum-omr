@@ -235,17 +235,30 @@ export default function App(){
     return n;
   });},[]);
   const hSub=useCallback((i,v)=>{setAns(p=>{const n=[...p];n[i]=v;return n;});},[]);
-  const hLookupExams=()=>{
+  const hLookupExams=async()=>{
     if(!nm.trim())return alert("이름을 입력하세요.");
     if(!/^\d{4}$/.test(ph))return alert("핸드폰 뒷 4자리를 입력하세요.");
     if(!gr)return alert("학년을 선택하세요.");
     if(!selTeacher)return alert("선생님을 선택하세요.");
     lsSet({nm:nm.trim(),ph});
     setLoadingExams(true);setTodayExams(null);
-    // 학년 + 선생님 + 날짜로 검색 (과목/레벨은 전체)
-    const params=new URLSearchParams({action:"list_exams_today",subject:"",grade:gr,level:"전체",date:pd,teacher:selTeacher});
-    fetch(`${SHEETS_URL}?${params.toString()}`)
-      .then(r=>r.json()).then(d=>{setTodayExams(d.exams||[]);setLoadingExams(false);}).catch(()=>{setTodayExams([]);setLoadingExams(false);});
+    // ★ 1차 검색: 학년 + 선생님 + 날짜 (엄격)
+    const query=async(teacherVal)=>{
+      const params=new URLSearchParams({action:"list_exams_today",subject:"",grade:gr,level:"전체",date:pd});
+      if(teacherVal)params.set("teacher",teacherVal);
+      try{const r=await fetch(`${SHEETS_URL}?${params.toString()}`);const d=await r.json();return d.exams||[];}
+      catch(e){return[];}
+    };
+    // 먼저 선택한 선생님으로
+    let exams=await query(selTeacher.trim());
+    // 0건이면 공백 제거/포함 매칭으로 재시도 (서버가 정확 일치만 하므로 클라이언트 필터로 보완)
+    if(exams.length===0){
+      const all=await query("");
+      const norm=(s)=>String(s||"").replace(/\s+/g,"").toLowerCase();
+      const t=norm(selTeacher);
+      exams=all.filter(e=>norm(e.teacher).indexOf(t)!==-1||t.indexOf(norm(e.teacher))!==-1);
+    }
+    setTodayExams(exams);setLoadingExams(false);
   };
   const hPickExam=(ex)=>{
     // 시험에서 과목/레벨 정보 가져오기 (className에서 추출하거나, 시험 데이터에서)
