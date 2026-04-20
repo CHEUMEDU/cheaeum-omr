@@ -1,9 +1,7 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
-
 /* ============================================================
    채움학원 웹 OMR v4 — Sheets 연동, 주관식, 문항수 선택
    ============================================================ */
-
 const SHEETS_URL = "https://script.google.com/macros/s/AKfycbzablzeV_gVdLoUG-Oh4s02vNmncvteesBn3875WDF3lO176nc4YzAKj7B6zOJVECQO/exec";
 const SUBJECTS=["영어","국어","수학"];
 const GRADES=["초3","초4","초5","초6","중1","중2","중3","고1","고2","고3"];
@@ -14,8 +12,36 @@ const SEC=20;const CV=[1,2,3,4,5];const CL=["1","2","3","4","5"];
 const LS_KEY="chaeum_omr_student";
 function lsGet(){try{return JSON.parse(localStorage.getItem(LS_KEY)||"{}");}catch(e){return{};}}
 function lsSet(o){try{localStorage.setItem(LS_KEY,JSON.stringify(o));}catch(e){}}
+// ============================================================
+// 정답 데이터 정규화 — 배열/객체/JSON문자열/이중 인코딩 모두 {"1":v,...}로 통일
+// (앱스크립트 normalizeAnswerData 와 동일 로직, 클라이언트 fallback)
+// ============================================================
+function normalizeAnswerData(raw){
+  if(raw===null||raw===undefined||raw==="")return{};
+  let v=raw;
+  for(let a=0;a<2;a++){
+    if(typeof v!=="string")break;
+    const s=v.trim();if(!s)return{};
+    try{v=JSON.parse(s);}catch(e){return{};}
+  }
+  if(v===null||v===undefined)return{};
+  const out={};
+  if(Array.isArray(v)){v.forEach((x,i)=>{out[String(i+1)]=x;});return out;}
+  if(typeof v==="object"){
+    const keys=Object.keys(v);
+    const allNum=keys.length>0&&keys.every(k=>/^\d+$/.test(k));
+    if(allNum){
+      const nums=keys.map(k=>parseInt(k,10)).sort((a,b)=>a-b);
+      const shift=(nums[0]===0)?1:0;
+      keys.forEach(k=>{out[String(parseInt(k,10)+shift)]=v[k];});
+      return out;
+    }
+    for(const k in v)out[k]=v[k];
+    return out;
+  }
+  return{"1":v};
+}
 const T={gold:"#D4A017",goldDark:"#B8860B",goldDeep:"#8B6914",goldLight:"#FFF3D0",goldPale:"#FFFBF0",goldMuted:"#F5E6B8",bg:"#FAFAF7",text:"#1A1A1A",textSub:"#5C5C5C",textMuted:"#999999",border:"#E8E4DA",borderLight:"#F0EDE4",accent:"#2E7D32",accentLight:"#E8F5E9",danger:"#C62828",dangerLight:"#FFEBEE",white:"#FFFFFF"};
-
 function todayStr(){const d=new Date();return`${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,"0")}.${String(d.getDate()).padStart(2,"0")}`;}
 function todayIso(){const d=new Date();return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
 function isoToDot(s){return(s||"").replace(/-/g,".");}
@@ -85,7 +111,6 @@ function gradeSubMulti(studentStr,keyStr){
   return{correct,total,partial:total>0?correct/total:0,details};
 }
 function getSecs(n){const s=[];for(let i=0;i<n;i+=SEC){s.push({start:i+1,end:Math.min(i+SEC,n),label:`${i+1}–${Math.min(i+SEC,n)}`});}return s;}
-
 function grade(ans,key,types,totalQ){
   let oc=0,ow=0,sc=0,totalObj=0,totalSub=0;const det=[];
   // 주관식 부분점수 합계 (0~totalSub 사이 소수)
@@ -150,7 +175,6 @@ function grade(ans,key,types,totalQ){
   const score=N>0?Math.round((num/N)*100):0;
   return{oc,ow,sc,to,totalObj,totalSub,totalQ:N,subPartial:Math.round(subPartialSum*100)/100,subPending,subCorrect,score,det};
 }
-
 function Chip({label,req,opts,val,onChange,custom:allowC}){
   const[c,setC]=useState(false);const[cv,setCv]=useState("");
   const h=(o)=>{if(o==="기타"&&allowC){setC(true);onChange("");}else{setC(false);setCv("");onChange(val===o?"":o);}};
@@ -160,7 +184,6 @@ function Chip({label,req,opts,val,onChange,custom:allowC}){
     {c&&allowC&&<input style={{...S.inp,marginTop:6}} placeholder="직접 입력" value={cv} onChange={e=>{setCv(e.target.value);onChange(e.target.value);}}/>}
   </div>);
 }
-
 export default function App(){
   const[tab,setTab]=useState("submit");
   const[scr,setScr]=useState("info");
@@ -178,7 +201,6 @@ export default function App(){
   const[conf,setConf]=useState(false);const[sec,setSec]=useState(0);const[wo,setWo]=useState(false);
   const[aKey,setAKey]=useState(null);const[tKey,setTKey]=useState(null);const[qNumMap,setQNumMap]=useState(null);const[aLoad,setALoad]=useState(false);const[aNF,setANF]=useState(false);
   const[sending,setSending]=useState(false);const[sendOk,setSendOk]=useState(null);
-
   // className: 시험 선택 시 ex.className 사용, 없으면 학년+선생님으로 생성
   const cn=exSub?`${exSub} ${gr} ${exLv}반`:(gr?`${gr}`:"")
   const ds=isoToDot(pd);
@@ -187,17 +209,13 @@ export default function App(){
   const sRefs=useRef([]);
   const ac=useMemo(()=>ans.filter(a=>isFilled(a)).length,[ans]);
   const ss=useMemo(()=>secs.map(s=>{let d=0;for(let i=s.start-1;i<s.end;i++)if(isFilled(ans[i]))d++;return{...s,done:d,total:s.end-s.start+1};}),[ans,secs]);
-
   useEffect(()=>{setAns(Array(qc).fill(null));},[qc]);
-
   // 선생님 목록 로드
   useEffect(()=>{
     fetch(`${SHEETS_URL}?action=list_teachers`)
       .then(r=>r.json()).then(d=>{if(d.result==="ok")setTeacherList(d.teachers||[]);}).catch(()=>{});
   },[]);
-
   // 선생님 목록은 teacherList 직접 사용 (과목별 optgroup 분류)
-
   // 객관식 버튼 토글: 같은 값 재클릭 시 해제, 다른 값 클릭 시 복수정답 추가
   const hAns=useCallback((i,v)=>{setAns(p=>{
     const n=[...p];
@@ -217,7 +235,6 @@ export default function App(){
     return n;
   });},[]);
   const hSub=useCallback((i,v)=>{setAns(p=>{const n=[...p];n[i]=v;return n;});},[]);
-
   const hLookupExams=()=>{
     if(!nm.trim())return alert("이름을 입력하세요.");
     if(!/^\d{4}$/.test(ph))return alert("핸드폰 뒷 4자리를 입력하세요.");
@@ -237,19 +254,17 @@ export default function App(){
       setSub(parts[0]||"");setLv((parts[2]||"").replace(/반$/,"")||"");
       setExSub(parts[0]||"");setExLv((parts[2]||"").replace(/반$/,"")||"");
     }
-    // 차수가 있으면 시험명에 " (1차)" 같이 붙여서 선생님 대시보드·기록에서도 구분되도록
-    setEt(ex.examType + (ex.round?` (${ex.round})`:""));
+    // 시험 구분(이론편/실전편/혼합)이 있으면 시험명 뒤에 붙여 선생님 대시보드·기록에서도 구분되도록
+    // 레거시 "1차/2차/3차" 값도 호환 (구 데이터)
+    const _setTag=(ex.setType||ex.round||"").trim();
+    setEt(ex.examType + (_setTag?` (${_setTag})`:""));
     const qTotal=Number(ex.totalQuestions)||100;setTq(qTotal);setCq("");
     setAns(Array(qTotal).fill(null));setScr("input");setALoad(false);setANF(false);
-    // ★ 배열 형태 정답을 객체로 변환 (off-by-one 방지)
-    let fixedAnswers=ex.answers||null;
-    let fixedTypes=ex.types||null;
-    if(Array.isArray(fixedAnswers)){
-      const obj={};fixedAnswers.forEach((v,i)=>{obj[String(i+1)]=v;});fixedAnswers=obj;
-    }
-    if(Array.isArray(fixedTypes)){
-      const obj={};fixedTypes.forEach((v,i)=>{obj[String(i+1)]=v;});fixedTypes=obj;
-    }
+    // ★ 어떤 형태(배열/객체/JSON문자열/이중인코딩)든 단일 함수로 정규화 → {"1":v,...}
+    const hasAns=ex.answers!==undefined&&ex.answers!==null&&ex.answers!=="";
+    const hasTyp=ex.types!==undefined&&ex.types!==null&&ex.types!=="";
+    const fixedAnswers=hasAns?normalizeAnswerData(ex.answers):null;
+    const fixedTypes=hasTyp?normalizeAnswerData(ex.types):null;
     setAKey(fixedAnswers);setTKey(fixedTypes);
     // 비순차 번호 지원: questionNumberMap = {"1":"182","2":"183",...} 또는 startNumber = 182
     if(ex.questionNumberMap){
@@ -260,15 +275,18 @@ export default function App(){
       setQNumMap(m);
     }else{
       // answers 키 분석: 모든 키가 숫자이고 1이 아닌 곳에서 시작하면 자동 감지
-      const keys=ex.answers?Object.keys(ex.answers).map(Number).filter(n=>!isNaN(n)).sort((a,b)=>a-b):[];
+      // (normalizeAnswerData 가 이미 1-based로 맞춰주지만, 원본 서버 키가 비순차(182,183,...)인 경우 대비해서
+      //  ex.answers 원본도 함께 확인)
+      const srcForNumMap=ex.answers&&typeof ex.answers==="object"&&!Array.isArray(ex.answers)?ex.answers:(fixedAnswers||{});
+      const keys=Object.keys(srcForNumMap).map(Number).filter(n=>!isNaN(n)).sort((a,b)=>a-b);
       if(keys.length>0&&keys[0]>1){
         const m={};for(let i=0;i<keys.length;i++)m[String(i+1)]=String(keys[i]);
         setQNumMap(m);
         // answers/types 키도 재매핑 (원래 키→순차 키)
         const remappedAns={},remappedTypes={};
         keys.forEach((k,i)=>{
-          if(ex.answers[String(k)]!==undefined)remappedAns[String(i+1)]=ex.answers[String(k)];
-          if(ex.types&&ex.types[String(k)]!==undefined)remappedTypes[String(i+1)]=ex.types[String(k)];
+          if(srcForNumMap[String(k)]!==undefined)remappedAns[String(i+1)]=srcForNumMap[String(k)];
+          if(fixedTypes&&fixedTypes[String(k)]!==undefined)remappedTypes[String(i+1)]=fixedTypes[String(k)];
         });
         setAKey(remappedAns);setTKey(Object.keys(remappedTypes).length>0?remappedTypes:null);
         setTq(keys.length);setCq("");setAns(Array(keys.length).fill(null));
@@ -276,7 +294,7 @@ export default function App(){
         setQNumMap(null);
       }
     }
-    if(ex.answers)setALoad(true);else setANF(true);
+    if(hasAns)setALoad(true);else setANF(true);
   };
   const hShowHistory=()=>{
     if(!nm.trim())return alert("이름을 입력하세요.");
@@ -286,9 +304,7 @@ export default function App(){
     fetch(`${SHEETS_URL}?action=student_history&name=${encodeURIComponent(nm.trim())}&phone=${encodeURIComponent(ph)}`)
       .then(r=>r.json()).then(d=>{if(d.result==="ok"){setHistory(d.records||[]);}else{setHistErr(d.message||"조회 실패");setHistory([]);}setLoadingHist(false);}).catch(()=>{setHistErr("네트워크 오류");setLoadingHist(false);});
   };
-
   const hSubmit=()=>{if(ac===0)return alert("최소 1문항 이상 답을 선택하세요.");setConf(true);};
-
   const hFinal=async()=>{
     setConf(false);setSending(true);
     const r=aKey?grade(ans,aKey,tKey,qc):null;setRes(r);
@@ -304,24 +320,19 @@ export default function App(){
       setSendOk(true);}catch(e){setSendOk(false);}
     setSending(false);setScr("result");
   };
-
   const hReset=()=>{setAns(Array(qc).fill(null));setRes(null);setWo(false);setSendOk(null);setScr("info");setSec(0);setNm("");setSub("");setGr("");setLv("");setEt("");setSelTeacher("");setAKey(null);setTKey(null);setQNumMap(null);setALoad(false);setANF(false);setTq(100);setCq("");setPd(todayIso());setTodayExams(null);};
   const scTo=(i)=>{setSec(i);sRefs.current[i]?.scrollIntoView({behavior:"smooth",block:"start"});};
   const goUA=()=>{const i=ans.findIndex(a=>a===null||a==="");if(i===-1)return alert("모든 문항에 답했습니다!");setSec(Math.floor(i/SEC));setTimeout(()=>{document.getElementById(`q-${i}`)?.scrollIntoView({behavior:"smooth",block:"center"});},100);};
   const clrAll=()=>{if(window.confirm("모든 답안을 초기화할까요?"))setAns(Array(qc).fill(null));};
-
   return(
     <div style={S.app}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap');*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}body{font-family:'Noto Sans KR',-apple-system,sans-serif;background:${T.bg}}input:focus{outline:none;border-color:${T.gold}!important;box-shadow:0 0 0 3px ${T.goldLight}!important}@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}@keyframes scaleIn{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}@keyframes spin{to{transform:rotate(360deg)}}.fade-up{animation:fadeUp .3s ease-out}.scale-in{animation:scaleIn .2s ease-out}::-webkit-scrollbar{width:3px;height:3px}::-webkit-scrollbar-thumb{background:${T.border};border-radius:3px}`}</style>
-
       <header style={S.hdr}><div style={S.hdrIn}><div style={S.logoR}><div style={S.logoM}>채움</div><div><div style={S.hdrT}>채움학원</div><div style={S.hdrS}>답안 제출 시스템</div></div></div>{scr==="input"&&<div style={S.hdrB}>{nm} · {cn||`${gr} ${selTeacher} 선생님`}</div>}</div></header>
-
       {/* ═══ 탭 전환 ═══ */}
       {scr==="info"&&(<div style={{display:"flex",gap:6,padding:"10px 14px 0"}}>
         <button onClick={()=>setTab("submit")} style={{flex:1,padding:"10px",fontSize:13,fontWeight:700,borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:tab==="submit"?T.goldDark:T.white,color:tab==="submit"?T.white:T.textSub,boxShadow:tab==="submit"?"none":`inset 0 0 0 1.5px ${T.border}`}}>📝 답안 제출</button>
         <button onClick={()=>setTab("history")} style={{flex:1,padding:"10px",fontSize:13,fontWeight:700,borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:tab==="history"?T.goldDark:T.white,color:tab==="history"?T.white:T.textSub,boxShadow:tab==="history"?"none":`inset 0 0 0 1.5px ${T.border}`}}>📊 내 성적</button>
       </div>)}
-
       {/* ═══ 정보 입력 (답안 제출 탭) ═══ */}
       {scr==="info"&&tab==="submit"&&(<div style={S.wrap} className="fade-up">
         <div style={S.hero}><div style={{fontSize:36,marginBottom:4}}>✏️</div><h1 style={S.heroT}>답안 제출</h1><p style={S.heroD}>본인 정보와 반을 선택하면<br/>해당 날짜의 시험 목록이 나타나요</p></div>
@@ -361,15 +372,33 @@ export default function App(){
             {todayExams.length===0?(<div style={{padding:"14px",background:T.dangerLight,borderRadius:10,color:T.danger,fontSize:13,fontWeight:600,textAlign:"center"}}>{ds} {gr} {selTeacher} 선생님 시험이 없습니다.<br/>선생님께 문의하세요.</div>):(
               <>
                 <div style={{fontSize:12,fontWeight:700,color:T.goldDeep,marginBottom:8}}>{ds} {gr} {selTeacher} 선생님 시험 ({todayExams.length}개)</div>
-                {todayExams.map((ex,i)=>{const classLabel=[ex.subject,ex.grade,ex.level?(ex.level+"반"):ex.className?"("+ex.className+")":""].filter(Boolean).join(" ");return(<button key={i} onClick={()=>hPickExam(ex)} style={{width:"100%",padding:"12px 14px",marginBottom:6,background:T.goldLight,border:`1.5px solid ${T.goldMuted}`,borderRadius:10,cursor:"pointer",fontFamily:"inherit",textAlign:"left",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <div>{classLabel&&<div style={{fontSize:16,fontWeight:800,color:T.goldDeep}}>{classLabel}</div>}<div style={{fontSize:12,fontWeight:600,color:T.goldDark,marginTop:2}}>{ex.examType}{ex.round?` · ${ex.round}`:""}</div><div style={{fontSize:11,color:T.textMuted,marginTop:2}}>{ex.totalQuestions}문항{ex.examTime?` · ${ex.examTime}`:ex.regTime?` · ${ex.regTime}`:""}</div></div>
-                  <div style={{fontSize:18,color:T.goldDark}}>→</div>
-                </button>);})}
+                {todayExams.map((ex,i)=>{
+                  const classLabel=[ex.subject,ex.grade,ex.level?(ex.level+"반"):ex.className?"("+ex.className+")":""].filter(Boolean).join(" ");
+                  // 시험 구분 뱃지 (이론편/실전편/혼합 또는 레거시 1차/2차/3차)
+                  const setTag=(ex.setType||ex.round||"").trim();
+                  const badgeInfo=(()=>{
+                    if(setTag==="이론편"||setTag==="이론") return {label:"이론",bg:"#E3F2FD",color:"#1565C0"};
+                    if(setTag==="실전편"||setTag==="실전") return {label:"실전",bg:"#FFEBEE",color:"#C62828"};
+                    if(setTag==="혼합") return {label:"혼합",bg:"#F3E5F5",color:"#6A1B9A"};
+                    if(setTag) return {label:setTag,bg:T.borderLight,color:T.textSub}; // 레거시 1차/2차/3차 등
+                    return null;
+                  })();
+                  return(<button key={i} onClick={()=>hPickExam(ex)} style={{width:"100%",padding:"12px 14px",marginBottom:6,background:T.goldLight,border:`1.5px solid ${T.goldMuted}`,borderRadius:10,cursor:"pointer",fontFamily:"inherit",textAlign:"left",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <div style={{flex:1}}>
+                      {classLabel&&<div style={{fontSize:16,fontWeight:800,color:T.goldDeep,display:"flex",alignItems:"center",gap:6}}>
+                        {classLabel}
+                        {badgeInfo&&<span style={{fontSize:10,fontWeight:700,padding:"2px 7px",borderRadius:10,background:badgeInfo.bg,color:badgeInfo.color}}>{badgeInfo.label}</span>}
+                      </div>}
+                      <div style={{fontSize:12,fontWeight:600,color:T.goldDark,marginTop:2}}>{ex.examType}</div>
+                      <div style={{fontSize:11,color:T.textMuted,marginTop:2}}>{ex.totalQuestions}문항{ex.examTime?` · ${ex.examTime}`:ex.regTime?` · ${ex.regTime}`:""}</div>
+                    </div>
+                    <div style={{fontSize:18,color:T.goldDark}}>→</div>
+                  </button>);
+                })}
               </>)}
           </div>)}
         </div>
       </div>)}
-
       {/* ═══ 내 성적 탭 ═══ */}
       {scr==="info"&&tab==="history"&&(<div style={S.wrap} className="fade-up">
         <div style={S.hero}><div style={{fontSize:36,marginBottom:4}}>📊</div><h1 style={S.heroT}>내 성적 조회</h1><p style={S.heroD}>이름과 핸드폰 뒷 4자리로<br/>지금까지 본 시험 결과를 확인하세요</p></div>
@@ -393,21 +422,16 @@ export default function App(){
           </div>)}
         </div>
       </div>)}
-
       {/* ═══ 답안 입력 ═══ */}
       {scr==="input"&&(<div className="fade-up">
         {!aLoad&&!aNF&&<div style={{padding:"8px 14px",background:T.goldLight,fontSize:12,color:T.goldDeep,fontWeight:600,textAlign:"center"}}>정답 데이터를 불러오는 중...</div>}
         {aNF&&<div style={{padding:"8px 14px",background:T.dangerLight,fontSize:12,color:T.danger,fontWeight:600,textAlign:"center"}}>⚠ 등록된 정답이 없습니다. 답안만 제출되며 나중에 채점됩니다.</div>}
         {aLoad&&<div style={{padding:"8px 14px",background:T.accentLight,fontSize:12,color:T.accent,fontWeight:600,textAlign:"center"}}>✓ 정답 로드 완료 — 제출 즉시 채점됩니다</div>}
-
         <div style={S.progA}><div style={S.progBg}><div style={{...S.progF,width:`${(ac/qc)*100}%`,background:ac===qc?T.accent:T.gold}}/></div>
           <div style={{display:"flex",alignItems:"center",gap:4,marginTop:5}}><span style={{fontWeight:700,color:T.goldDark,fontSize:13}}>{ac}</span><span style={{color:T.textMuted,fontSize:13}}>/{qc}</span>
             <span style={{marginLeft:"auto",fontSize:12,fontWeight:600,color:ac===qc?T.accent:T.textMuted}}>{ac===qc?"✓ 완료":`${qc-ac}문항 남음`}</span></div></div>
-
         <div style={S.secTA}><div style={S.secTS}>{ss.map((s,i)=>{const a=i===sec,d=s.done===s.total;return(<button key={i} onClick={()=>scTo(i)} style={{...S.secT,background:a?T.goldDark:d?T.accentLight:T.white,color:a?T.white:d?T.accent:T.textSub,borderColor:a?T.goldDark:d?T.accent:T.border,fontWeight:a?700:500}}><span style={{fontSize:qNumMap?10:12}}>{qNumMap?`${qNumMap[String(s.start)]||s.start}–${qNumMap[String(s.end)]||s.end}`:s.label}</span><span style={{fontSize:10,opacity:.8}}>{d?"✓":`${s.done}/${s.total}`}</span></button>);})}</div></div>
-
         <div style={S.qkR}><button style={S.qkB} onClick={goUA}>⚡ 빈 문항 이동</button><button style={{...S.qkB,color:T.danger,background:T.dangerLight}} onClick={clrAll}>↺ 초기화</button></div>
-
         <div style={S.qLW}>{secs.map((s,si)=>(<div key={si} ref={el=>sRefs.current[si]=el}>
           <div style={S.secH}><span style={S.secTi}>{qNumMap?`${qNumMap[String(s.start)]||s.start}(${s.start})–${qNumMap[String(s.end)]||s.end}(${s.end})`:s.label}번</span><span style={S.secC}>{ss[si].done}/{ss[si].total}</span></div>
           {Array.from({length:s.end-s.start+1},(_,j)=>{const qi=s.start-1+j,sel=ans[qi],_tv=tKey?(tKey[String(qi+1)]??tKey[qi+1]??tKey[qi]):null,isSub=_tv==="sub",fi=isFilled(sel);
@@ -439,9 +463,7 @@ export default function App(){
               </div>)}
             </div>);})}
         </div>))}</div>
-
         <div style={S.subBar}><div style={{flex:1}}><span style={{fontSize:13,fontWeight:600,color:T.goldDark}}>{ac}문항 입력 완료</span></div><button style={S.subBtn} onClick={hSubmit}>제출하기</button></div>
-
         {conf&&(<div style={S.ov} onClick={()=>setConf(false)}><div style={S.mod} className="scale-in" onClick={e=>e.stopPropagation()}>
           <div style={{fontSize:32,textAlign:"center",marginBottom:8}}>📋</div><h3 style={S.modT}>답안을 제출할까요?</h3>
           <div style={S.modSR}><div style={S.modS}><span style={{fontSize:24,fontWeight:800,color:T.goldDark}}>{ac}</span><span style={{fontSize:11,color:T.textMuted}}>입력</span></div><div style={{width:1,height:36,background:T.border}}/><div style={S.modS}><span style={{fontSize:24,fontWeight:800,color:T.textMuted}}>{qc-ac}</span><span style={{fontSize:11,color:T.textMuted}}>미입력</span></div></div>
@@ -449,9 +471,7 @@ export default function App(){
           <div style={{display:"flex",gap:10}}><button style={S.modCa} onClick={()=>setConf(false)}>돌아가기</button><button style={S.modCo} onClick={hFinal}>제출하기</button></div>
         </div></div>)}
       </div>)}
-
       {sending&&(<div style={S.ov}><div style={{...S.mod,padding:"40px 20px"}}><div style={{width:40,height:40,border:`3px solid ${T.borderLight}`,borderTopColor:T.gold,borderRadius:"50%",animation:"spin .8s linear infinite",margin:"0 auto 16px"}}/><p style={{fontSize:15,fontWeight:700,color:T.text}}>채점 중...</p></div></div>)}
-
       {/* ═══ 결과 ═══ */}
       {scr==="result"&&!sending&&(<div style={S.wrap} className="fade-up">
         {res?(<>
@@ -500,9 +520,7 @@ export default function App(){
     </div>
   );
 }
-
 function SC({i,l,v,c}){return(<div style={{flex:1,background:T.white,borderRadius:12,padding:"12px 6px",display:"flex",flexDirection:"column",alignItems:"center",gap:2,boxShadow:"0 1px 3px rgba(0,0,0,0.05)",border:`1px solid ${T.borderLight}`}}><span style={{fontSize:18}}>{i}</span><span style={{fontSize:18,fontWeight:800,color:c}}>{v}</span><span style={{fontSize:10,color:T.textMuted,fontWeight:500}}>{l}</span></div>);}
-
 const S={
   app:{fontFamily:"'Noto Sans KR',-apple-system,sans-serif",background:T.bg,minHeight:"100vh",maxWidth:480,margin:"0 auto",paddingBottom:100},
   hdr:{background:T.white,borderBottom:`1px solid ${T.border}`,position:"sticky",top:0,zIndex:100},
