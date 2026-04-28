@@ -4,31 +4,33 @@
 // ============================================================
 // 버전 이력
 // ─────────────────────────────────────────
-// v22.0 (2026-04-28)
-//   ★ types 토큰 호환성 — "sub" 와 "sa" 모두 주관식으로 인식
-//      (이전: "sub" 만 인식 → AI가 "sa"로 저장한 답지는 객관식으로 표시되는 버그)
-//   ★ 채점 함수에도 양쪽 호환 추가
+// v22.2 (2026-04-28)
+//   ★ 주관식 가중치 적용 — 혼합 시험 시 주관식 점수 1.5배 (객관식보다 더 어려움)
+//      전체 주관식이면 가중치 X (모두 동일 배점)
+//   ★ 문법 설명(grammarTip) 표시 — Gemini가 알려주는 학습 팁
+//   ★ Vercel API 65초 timeout 안전장치 (Vercel 60초 한도 + 5초 여유)
 //
-// v6 (2026-04-28)
-//   · 주관식 자동 채점 (Gemini 2.5 Flash)
-//   · 배치 호출 (1학생 = 1회 API 호출 → 비용 1/5)
+// v22.1 (2026-04-28)  — API 절대 URL (404 해결)
 //
-// v5 (2026-04-27)
-//   · 5단계 채점 기준 + AI 채점 사유 표시
+// v22.0 (2026-04-28)  — types "sub"/"sa" 호환
 //
-// v4 (이전)
-//   · 시작번호, 비순차 번호 지원
-//   · 다중학교 통합반 지원
+// v6  — 주관식 자동 채점 (Gemini 2.5 Flash, 배치)
+// v5  — 5단계 채점 기준
+// v4  — 시작번호, 다중학교 통합반
 // ============================================================
 
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 
-const VERSION = "v22.1";
+const VERSION = "v22.2";
 const SHEETS_URL = "https://script.google.com/macros/s/AKfycbzablzeV_gVdLoUG-Oh4s02vNmncvteesBn3875WDF3lO176nc4YzAKj7B6zOJVECQO/exec";
-// ★ v22.1: 학생앱과 API가 다른 도메인이므로 절대 URL 사용 (CORS 허용됨)
-//    학생앱 도메인: cheaeum-omr.vercel.app
-//    API 도메인:    chaeum-teacher.vercel.app
+// ★ v22.2: API 절대 URL (CORS 허용)
 const GRADE_SUBJECTIVE_URL = "https://chaeum-teacher.vercel.app/api/grade-subjective";
+// ★ v22.2: 채점 timeout 65초 (Vercel Node Runtime 60초 한도 + 5초 여유)
+const GRADE_TIMEOUT_MS = 65000;
+// ★ v22.2: 주관식 가중치 (객관식 1배, 주관식 1.5배)
+//   혼합 시험: 주관식이 더 어렵고 시간 오래 걸리므로 1.5배 점수
+//   전체 주관식 또는 전체 객관식: 동일 배점 (가중치 무의미)
+const SUB_WEIGHT_MIXED = 1.5;
 
 const SUBJECTS=["영어","국어","수학"];
 const GRADES=["초3","초4","초5","초6","중1","중2","중3","고1","고2","고3"];
@@ -137,29 +139,36 @@ function getSecs(n){const s=[];for(let i=0;i<n;i+=SEC){s.push({start:i+1,end:Mat
 async function gradeSubjectiveBatch(items){
   if(!GRADE_SUBJECTIVE_URL)return [];
   if(!items||items.length===0)return [];
+  // ★ v22.2: AbortController 로 65초 timeout 안전장치 (서버 응답 안 와도 무한 대기 방지)
+  const controller=new AbortController();
+  const timeoutId=setTimeout(()=>controller.abort(),GRADE_TIMEOUT_MS);
   try{
     const res=await fetch(GRADE_SUBJECTIVE_URL,{
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({items})
+      body:JSON.stringify({items}),
+      signal:controller.signal
     });
+    clearTimeout(timeoutId);
     if(!res.ok){
       const t=await res.text();
       return items.map(it=>({
-        q:it.q,score:0,category:"ERROR",deductions:[],
+        q:it.q,score:0,category:"ERROR",deductions:[],grammarTip:"",
         reasoning:`HTTP ${res.status}: ${t.substring(0,100)}`
       }));
     }
     const j=await res.json();
     if(j.ok&&Array.isArray(j.results))return j.results;
     return items.map(it=>({
-      q:it.q,score:0,category:"ERROR",deductions:[],
+      q:it.q,score:0,category:"ERROR",deductions:[],grammarTip:"",
       reasoning:j.error||"채점 응답 없음"
     }));
   }catch(e){
+    clearTimeout(timeoutId);
+    const isTimeout=e.name==="AbortError";
     return items.map(it=>({
-      q:it.q,score:0,category:"ERROR",deductions:[],
-      reasoning:"호출 실패: "+String(e)
+      q:it.q,score:0,category:isTimeout?"TIMEOUT":"ERROR",deductions:[],grammarTip:"",
+      reasoning:isTimeout?"채점 시간 초과 (65초). 답안이 너무 길거나 서버 부하. 잠시 후 다시 시도하세요.":"호출 실패: "+String(e)
     }));
   }
 }
@@ -219,9 +228,15 @@ function grade(ans,key,types,totalQ){
   const to=oc+ow;
   const subPending=det.filter(d=>d.t==="sub"&&d.r==="채점중").length;
   const subCorrect=det.filter(d=>d.t==="sub"&&d.r==="정답").length;
-  const num=oc+subPartialSum;
-  const score=N>0?Math.round((num/N)*100):0;
-  return{oc,ow,sc,to,totalObj,totalSub,totalQ:N,subPartial:Math.round(subPartialSum*100)/100,subPending,subCorrect,score,det};
+  // ★ v22.2: 주관식 가중치 적용
+  //   혼합 시험 (객관식+주관식): 주관식 1.5배 (객관식 1점, 주관식 1.5점)
+  //   전체 주관식 또는 전체 객관식: 동일 배점
+  const isMixed=totalObj>0&&totalSub>0;
+  const subWeight=isMixed?SUB_WEIGHT_MIXED:1.0;
+  const totalPossible=totalObj+totalSub*subWeight;  // 전체 만점 (가중치 적용)
+  const earnedPoints=oc+subPartialSum*subWeight;     // 학생 점수 (가중치 적용)
+  const score=totalPossible>0?Math.round((earnedPoints/totalPossible)*100):0;
+  return{oc,ow,sc,to,totalObj,totalSub,totalQ:N,subPartial:Math.round(subPartialSum*100)/100,subPending,subCorrect,score,det,subWeight,isMixed};
 }
 
 function Chip({label,req,opts,val,onChange,custom:allowC}){
@@ -453,13 +468,21 @@ export default function App(){
           if(!prev)return prev;
           const newOc=prev.oc;
           const subPartialNew=Math.round((subjScoreSum)*100)/100;
-          const newScore=prev.totalQ>0?Math.round(((newOc+subjScoreSum)/prev.totalQ)*100):0;
+          // ★ v22.2: 가중치 적용한 점수 재계산 (혼합 시험 시 주관식 1.5배)
+          const subWeight=prev.subWeight||1.0;
+          const totalPossible=prev.totalObj+prev.totalSub*subWeight;
+          const earnedPoints=newOc+subjScoreSum*subWeight;
+          const newScore=totalPossible>0?Math.round((earnedPoints/totalPossible)*100):0;
           const newSubPending=updatedDet.filter(d=>d.t==="sub"&&d.r==="채점중").length;
           const newSubCorrect=updatedDet.filter(d=>d.t==="sub"&&d.r==="정답").length;
           return{...prev,det:updatedDet,subPartial:subPartialNew,score:newScore,subPending:newSubPending,subCorrect:newSubCorrect};
         });
         setGradingSub(false);
-        const finalScore=initial.totalQ>0?Math.round(((initial.oc+subjScoreSum)/initial.totalQ)*100):0;
+        // ★ v22.2: 최종 점수도 가중치 적용
+        const subWeight=initial.subWeight||1.0;
+        const totalPossibleFinal=initial.totalObj+initial.totalSub*subWeight;
+        const earnedPointsFinal=initial.oc+subjScoreSum*subWeight;
+        const finalScore=totalPossibleFinal>0?Math.round((earnedPointsFinal/totalPossibleFinal)*100):0;
         const finalCorrect=initial.oc+updatedDet.filter(d=>d.t==="sub"&&d.r==="정답").length;
         const finalWrong=initial.ow+updatedDet.filter(d=>d.t==="sub"&&d.r==="오답").length;
         const finalWrongQs=updatedDet.filter(d=>d.r==="오답").map(d=>d.q);
@@ -631,7 +654,8 @@ export default function App(){
             <div style={{fontSize:13,opacity:.9}}>{nm} · {cn}</div>
             <div style={{fontSize:56,fontWeight:800,lineHeight:1.1,margin:"4px 0"}}>{res.score}<span style={{fontSize:22}}>점</span></div>
             <div style={{fontSize:13,opacity:.85,marginBottom:4}}>{et} · {ds}</div>
-            <div style={{fontSize:12,opacity:.7,marginBottom:8}}>전체 {res.totalQ}문항 중 {res.oc+res.subCorrect}개 정답 · {res.ow}개 오답 · {res.totalQ-(res.to+res.sc)}개 미입력{res.subPending>0?` · ⏳ ${res.subPending}문항 채점중`:""}</div>
+            <div style={{fontSize:12,opacity:.7,marginBottom:4}}>전체 {res.totalQ}문항 중 {res.oc+res.subCorrect}개 정답 · {res.ow}개 오답 · {res.totalQ-(res.to+res.sc)}개 미입력{res.subPending>0?` · ⏳ ${res.subPending}문항 채점중`:""}</div>
+            {res.isMixed&&<div style={{fontSize:11,opacity:.65,marginBottom:8}}>📌 객관식 1점 · 주관식 1.5점 가중치 적용 (만점 {res.totalObj+Math.round(res.totalSub*1.5*10)/10}점)</div>}
             <div style={S.scFB}>{res.score>=90?"🎉 훌륭합니다!":res.score>=70?"💪 잘했어요!":"📚 오답을 복습하세요!"}</div>
           </div>
           {gradingSub&&<div style={{padding:"12px 14px",borderRadius:10,marginBottom:14,background:`linear-gradient(90deg,${T.accentLight},${T.goldLight})`,border:`1.5px solid ${T.accent}`,display:"flex",alignItems:"center",gap:10}}>
@@ -659,13 +683,27 @@ export default function App(){
                     <span style={{flex:"0 0 60px",textAlign:"center",fontSize:14}}>{d.r==="정답"?"✅":d.r==="오답"?"❌":d.r==="부분정답"?<span style={{fontSize:11,fontWeight:700,color:"#B8860B"}}>{d.partial}</span>:"⏳"}</span>
                   </div>
                   {d.t==="sub"&&d.gradeResult&&d.gradeResult.reasoning&&(
-                    <div style={{padding:"6px 10px",marginTop:4,marginLeft:72,background:T.white,border:`1px solid ${T.borderLight}`,borderRadius:6,fontSize:11,color:T.textSub,lineHeight:1.5}}>
-                      <span style={{fontWeight:700,color:T.accent}}>🤖 AI 채점:</span> {d.gradeResult.reasoning}
+                    <div style={{padding:"8px 12px",marginTop:4,marginLeft:72,background:T.white,border:`1px solid ${T.borderLight}`,borderRadius:8,fontSize:11,color:T.textSub,lineHeight:1.6}}>
+                      <div><span style={{fontWeight:700,color:T.accent}}>🤖 AI 채점:</span> {d.gradeResult.reasoning}</div>
                       {d.gradeResult.deductions&&d.gradeResult.deductions.length>0&&(
-                        <div style={{marginTop:4,display:"flex",flexWrap:"wrap",gap:4}}>
+                        <div style={{marginTop:5,display:"flex",flexWrap:"wrap",gap:4}}>
                           {d.gradeResult.deductions.map((dd,di)=>(
-                            <span key={di} style={{padding:"2px 6px",background:T.dangerLight,color:T.danger,borderRadius:4,fontSize:10,fontWeight:600}}>{dd.type} {dd.amount}%</span>
+                            <span key={di} style={{padding:"2px 6px",background:T.dangerLight,color:T.danger,borderRadius:4,fontSize:10,fontWeight:600}}>
+                              {dd.blank?`(${dd.blank}) `:""}{dd.type} {dd.amount}%
+                            </span>
                           ))}
+                        </div>
+                      )}
+                      {/* ★ v22.2: 문법 설명 표시 (학생 학습용) */}
+                      {d.gradeResult.grammarTip&&(
+                        <div style={{marginTop:6,padding:"6px 8px",background:"#E3F2FD",border:`1px solid #90CAF9`,borderRadius:6,fontSize:11,color:"#0D47A1",lineHeight:1.6,whiteSpace:"pre-wrap"}}>
+                          <span style={{fontWeight:700}}>💡 문법 팁:</span> {d.gradeResult.grammarTip}
+                        </div>
+                      )}
+                      {/* ★ v22.2: 빈칸별 점수 (멀티블랭크인 경우) */}
+                      {d.gradeResult.blanks&&d.gradeResult.blanks.length>0&&(
+                        <div style={{marginTop:6,fontSize:10,color:T.textMuted}}>
+                          빈칸별: {d.gradeResult.blanks.map(b=>`(${b.index}) ${b.score}점`).join(' · ')}
                         </div>
                       )}
                     </div>
