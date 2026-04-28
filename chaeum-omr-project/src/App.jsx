@@ -23,10 +23,12 @@
 
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 
-const VERSION = "v22.0";
+const VERSION = "v22.1";
 const SHEETS_URL = "https://script.google.com/macros/s/AKfycbzablzeV_gVdLoUG-Oh4s02vNmncvteesBn3875WDF3lO176nc4YzAKj7B6zOJVECQO/exec";
-// ★ Gemini 주관식 자동 채점 (Vercel Edge Function)
-const GRADE_SUBJECTIVE_URL = "/api/grade-subjective";
+// ★ v22.1: 학생앱과 API가 다른 도메인이므로 절대 URL 사용 (CORS 허용됨)
+//    학생앱 도메인: cheaeum-omr.vercel.app
+//    API 도메인:    chaeum-teacher.vercel.app
+const GRADE_SUBJECTIVE_URL = "https://chaeum-teacher.vercel.app/api/grade-subjective";
 
 const SUBJECTS=["영어","국어","수학"];
 const GRADES=["초3","초4","초5","초6","중1","중2","중3","고1","고2","고3"];
