@@ -1,12 +1,33 @@
+// ============================================================
+// 채움학원 학생앱 (OMR + 답안 제출)
+// 파일 경로: cheaeum-omr/chaeum-omr-project/src/App.jsx
+// ============================================================
+// 버전 이력
+// ─────────────────────────────────────────
+// v22.0 (2026-04-28)
+//   ★ types 토큰 호환성 — "sub" 와 "sa" 모두 주관식으로 인식
+//      (이전: "sub" 만 인식 → AI가 "sa"로 저장한 답지는 객관식으로 표시되는 버그)
+//   ★ 채점 함수에도 양쪽 호환 추가
+//
+// v6 (2026-04-28)
+//   · 주관식 자동 채점 (Gemini 2.5 Flash)
+//   · 배치 호출 (1학생 = 1회 API 호출 → 비용 1/5)
+//
+// v5 (2026-04-27)
+//   · 5단계 채점 기준 + AI 채점 사유 표시
+//
+// v4 (이전)
+//   · 시작번호, 비순차 번호 지원
+//   · 다중학교 통합반 지원
+// ============================================================
+
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
-/* ============================================================
-   채움학원 웹 OMR v5 — 주관식 Gemini 자동 채점 (실시간 부분점수)
-   ============================================================ */
+
+const VERSION = "v22.0";
 const SHEETS_URL = "https://script.google.com/macros/s/AKfycbzablzeV_gVdLoUG-Oh4s02vNmncvteesBn3875WDF3lO176nc4YzAKj7B6zOJVECQO/exec";
-// ★ v5: 주관식 자동 채점 (Vercel Edge Function) — 5단계 채점 기준 + Gemini 2.5 Flash
-//   같은 Vercel 도메인이면 상대경로 "/api/grade-subjective"
-//   다른 도메인이면 절대 URL (예: "https://your-app.vercel.app/api/grade-subjective")
+// ★ Gemini 주관식 자동 채점 (Vercel Edge Function)
 const GRADE_SUBJECTIVE_URL = "/api/grade-subjective";
+
 const SUBJECTS=["영어","국어","수학"];
 const GRADES=["초3","초4","초5","초6","중1","중2","중3","고1","고2","고3"];
 const LEVELS=["SB","B","I","A","SA","기타"];
@@ -16,9 +37,15 @@ const SEC=20;const CV=[1,2,3,4,5];const CL=["1","2","3","4","5"];
 const LS_KEY="chaeum_omr_student";
 function lsGet(){try{return JSON.parse(localStorage.getItem(LS_KEY)||"{}");}catch(e){return{};}}
 function lsSet(o){try{localStorage.setItem(LS_KEY,JSON.stringify(o));}catch(e){}}
-// ============================================================
-// 정답 데이터 정규화 — 배열/객체/JSON문자열/이중 인코딩 모두 {"1":v,...}로 통일
-// ============================================================
+
+// ★ v22.0: 주관식 타입 판별 헬퍼 — "sub", "sa", "subj", "subjective" 모두 인식
+function isSubjectiveType(tv){
+  if(!tv)return false;
+  const t=String(tv).toLowerCase().trim();
+  return t==="sub"||t==="sa"||t==="subj"||t==="subjective"||t==="essay"||t==="주관식";
+}
+
+// 정답 데이터 정규화
 function normalizeAnswerData(raw){
   if(raw===null||raw===undefined||raw==="")return{};
   let v=raw;
@@ -44,10 +71,13 @@ function normalizeAnswerData(raw){
   }
   return{"1":v};
 }
+
 const T={gold:"#D4A017",goldDark:"#B8860B",goldDeep:"#8B6914",goldLight:"#FFF3D0",goldPale:"#FFFBF0",goldMuted:"#F5E6B8",bg:"#FAFAF7",text:"#1A1A1A",textSub:"#5C5C5C",textMuted:"#999999",border:"#E8E4DA",borderLight:"#F0EDE4",accent:"#2E7D32",accentLight:"#E8F5E9",danger:"#C62828",dangerLight:"#FFEBEE",white:"#FFFFFF"};
+
 function todayStr(){const d=new Date();return`${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,"0")}.${String(d.getDate()).padStart(2,"0")}`;}
 function todayIso(){const d=new Date();return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
 function isoToDot(s){return(s||"").replace(/-/g,".");}
+
 function vl(v){
   if(v===null||v===undefined||v==="")return"–";
   if(Array.isArray(v)){
@@ -60,6 +90,7 @@ function vl(v){
   const n=Number(v);const i=CV.indexOf(n);
   return i>=0?CL[i]:String(v);
 }
+
 function normAns(v){
   if(v===null||v===undefined||v==="")return"";
   if(Array.isArray(v))return[...v].map(x=>String(x).trim()).filter(Boolean).sort().join(",");
@@ -67,14 +98,17 @@ function normAns(v){
   if(s.indexOf(",")!==-1)return s.split(",").map(x=>x.trim()).filter(Boolean).sort().join(",");
   return s.trim();
 }
+
 function isFilled(v){
   if(v===null||v===undefined||v==="")return false;
   if(Array.isArray(v))return v.length>0;
   return true;
 }
+
 function normText(s){
   return String(s||"").trim().toLowerCase().replace(/\s+/g," ").replace(/[.!?,·~]+$/,"");
 }
+
 function normalizeSubKey(raw){
   if(!raw||typeof raw!=="string")return raw;
   if(raw.indexOf("|")!==-1)return raw;
@@ -91,11 +125,12 @@ function normalizeSubKey(raw){
   if(parts.length>1)return parts.map(s=>s.trim()).join("|");
   return raw;
 }
+
 function getSecs(n){const s=[];for(let i=0;i<n;i+=SEC){s.push({start:i+1,end:Math.min(i+SEC,n),label:`${i+1}–${Math.min(i+SEC,n)}`});}return s;}
+
 // ============================================================
-// ★ v5: Gemini 주관식 채점 호출 (Vercel API)
-// ------------------------------------------------------------
-// ★ v6: 배치 채점 — 1학생의 모든 주관식을 한 번에 채점 (비용 1/5 절감)
+// ★ Gemini 주관식 배치 채점 호출 (Vercel API)
+// 1학생의 모든 주관식을 한 번에 채점 → 비용 1/5
 // ============================================================
 async function gradeSubjectiveBatch(items){
   if(!GRADE_SUBJECTIVE_URL)return [];
@@ -108,7 +143,6 @@ async function gradeSubjectiveBatch(items){
     });
     if(!res.ok){
       const t=await res.text();
-      // 모든 항목에 동일한 에러 반환
       return items.map(it=>({
         q:it.q,score:0,category:"ERROR",deductions:[],
         reasoning:`HTTP ${res.status}: ${t.substring(0,100)}`
@@ -127,43 +161,33 @@ async function gradeSubjectiveBatch(items){
     }));
   }
 }
-// 단일 답안 채점 (하위호환용 — 더 이상 사용 안 함)
-async function gradeSubjectiveAnswer(studentAnswer, correctAnswer, questionContext){
-  const result=await gradeSubjectiveBatch([{
-    q:1,
-    studentAnswer:String(studentAnswer||""),
-    correctAnswer:String(correctAnswer||""),
-    questionContext:String(questionContext||"")
-  }]);
-  if(result&&result[0]){
-    const r=result[0];
-    return{score:r.score,category:r.category,deductions:r.deductions,reasoning:r.reasoning};
-  }
-  return{score:0,category:"ERROR",deductions:[],reasoning:"응답 없음"};
-}
-// 객관식만 채점하고, 주관식은 "채점중" 상태로 둠 (이후 Gemini 비동기 채점)
+
+// ============================================================
+// 채점 함수 (객관식만 즉시 채점, 주관식은 "채점중" → Gemini 후처리)
+// ★ v22.0: isSubjectiveType 함수로 "sub"/"sa" 모두 인식
+// ============================================================
 function grade(ans,key,types,totalQ){
   let oc=0,ow=0,sc=0,totalObj=0,totalSub=0;const det=[];
   let subPartialSum=0;
   const N=totalQ||ans.length;
-  // 1) 전체 문항 유형 집계 (답을 안 했어도 카운트)
+  // 1) 전체 문항 유형 집계
   for(let i=0;i<N;i++){
     const qk=String(i+1);
     const tv=types?(types[qk]??types[i]):null;
-    const isObj=!tv||tv==="obj"||tv==="mc";
-    if(isObj)totalObj++;else totalSub++;
+    const isSub=isSubjectiveType(tv);
+    if(isSub)totalSub++;else totalObj++;
   }
   // 2) 학생 답안 채점
   for(let i=0;i<ans.length;i++){
     if(!isFilled(ans[i]))continue;
     const qk=String(i+1);
     const tv=types?(types[qk]??types[i]):null;
-    const isObj=!tv||tv==="obj"||tv==="mc";
+    const isSub=isSubjectiveType(tv);
     const cRaw=key?(key[qk]??key[i]):null;
     const c=(cRaw!==null&&cRaw!==undefined&&cRaw!=="")?String(cRaw):null;
     const uRaw=ans[i];
-    if(isObj){
-      // 객관식: 정렬 정규화 후 비교 (복수정답 지원)
+    if(!isSub){
+      // 객관식
       const uNorm=normAns(uRaw);
       const cNorm=c!==null?normAns(c):null;
       const uDisp=Array.isArray(uRaw)?uRaw.join(","):String(uRaw);
@@ -172,7 +196,7 @@ function grade(ans,key,types,totalQ){
         else{ow++;det.push({q:i+1,s:uDisp,c,r:"오답",t:"obj"});}
       }
     }else{
-      // 주관식: 빠른 일치 체크 → 일치 시 즉시 정답, 아니면 "채점중" (Gemini 후처리)
+      // 주관식: 빠른 일치 체크 → 일치 시 즉시 정답, 아니면 "채점중"
       const uStr=String(uRaw);
       const cNormSub=c!==null?normalizeSubKey(c):null;
       if(cNormSub!==null){
@@ -197,6 +221,7 @@ function grade(ans,key,types,totalQ){
   const score=N>0?Math.round((num/N)*100):0;
   return{oc,ow,sc,to,totalObj,totalSub,totalQ:N,subPartial:Math.round(subPartialSum*100)/100,subPending,subCorrect,score,det};
 }
+
 function Chip({label,req,opts,val,onChange,custom:allowC}){
   const[c,setC]=useState(false);const[cv,setCv]=useState("");
   const h=(o)=>{if(o==="기타"&&allowC){setC(true);onChange("");}else{setC(false);setCv("");onChange(val===o?"":o);}};
@@ -206,6 +231,7 @@ function Chip({label,req,opts,val,onChange,custom:allowC}){
     {c&&allowC&&<input style={{...S.inp,marginTop:6}} placeholder="직접 입력" value={cv} onChange={e=>{setCv(e.target.value);onChange(e.target.value);}}/>}
   </div>);
 }
+
 export default function App(){
   const[tab,setTab]=useState("submit");
   const[scr,setScr]=useState("info");
@@ -223,7 +249,6 @@ export default function App(){
   const[conf,setConf]=useState(false);const[sec,setSec]=useState(0);const[wo,setWo]=useState(false);
   const[aKey,setAKey]=useState(null);const[tKey,setTKey]=useState(null);const[qNumMap,setQNumMap]=useState(null);const[aLoad,setALoad]=useState(false);const[aNF,setANF]=useState(false);
   const[sending,setSending]=useState(false);const[sendOk,setSendOk]=useState(null);
-  // ★ v5: 주관식 자동 채점 진행 상태
   const[gradingSub,setGradingSub]=useState(false);
   const[gradingProgress,setGradingProgress]=useState({done:0,total:0});
   const cn=exSub?`${exSub} ${gr} ${exLv}반`:(gr?`${gr}`:"")
@@ -234,7 +259,6 @@ export default function App(){
   const ac=useMemo(()=>ans.filter(a=>isFilled(a)).length,[ans]);
   const ss=useMemo(()=>secs.map(s=>{let d=0;for(let i=s.start-1;i<s.end;i++)if(isFilled(ans[i]))d++;return{...s,done:d,total:s.end-s.start+1};}),[ans,secs]);
   useEffect(()=>{setAns(Array(qc).fill(null));},[qc]);
-  // 선생님 목록 로드
   useEffect(()=>{
     fetch(`${SHEETS_URL}?action=list_teachers`)
       .then(r=>r.json()).then(d=>{if(d.result==="ok")setTeacherList(d.teachers||[]);}).catch(()=>{});
@@ -355,17 +379,12 @@ export default function App(){
   };
   const hSubmit=()=>{if(ac===0)return alert("최소 1문항 이상 답을 선택하세요.");setConf(true);};
   // ============================================================
-  // ★ v5: 답안 제출 + Gemini 주관식 자동 채점
-  //   1) 객관식 즉시 채점 (grade())
-  //   2) 결과 화면 즉시 표시 (주관식은 "채점중" 상태)
-  //   3) Gemini API 로 주관식 비동기 채점
-  //   4) 채점 끝나면 res 갱신 + GAS 에 최종 결과 저장
+  // ★ v22.0: 답안 제출 + Gemini 주관식 배치 자동 채점
   // ============================================================
   const hFinal=async()=>{
     setConf(false);setSending(true);
     const initial=aKey?grade(ans,aKey,tKey,qc):null;setRes(initial);
     const ansSerialized=ans.map(v=>Array.isArray(v)?v.join(","):v);
-    // 1차 GAS 저장 — 객관식 점수만 우선 (주관식은 추후 갱신)
     try{
       await fetch(SHEETS_URL,{method:"POST",mode:"no-cors",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({
@@ -383,32 +402,28 @@ export default function App(){
       setSendOk(true);
     }catch(e){setSendOk(false);}
     setSending(false);setScr("result");
-    // ★ v6: 주관식 배치 채점 — 1번의 API 호출로 모든 주관식 처리 (비용 1/5)
+    // 주관식 배치 채점
     if(initial){
       const subjPending=initial.det.filter(d=>d.t==="sub"&&d.r==="채점중");
       if(subjPending.length>0&&aKey){
         setGradingSub(true);
         setGradingProgress({done:0,total:subjPending.length});
-        // 모든 주관식 답안을 items 배열로 묶음
         const items=subjPending.map(d=>({
           q:d.q,
           studentAnswer:String(ans[d.q-1]||""),
           correctAnswer:String(aKey[String(d.q)]??aKey[d.q-1]??""),
           questionContext:""
         }));
-        // ★ 한 번의 API 호출로 모든 주관식 일괄 채점
         const batchResults=await gradeSubjectiveBatch(items);
         const updatedDet=[...initial.det];
         let subjScoreSum=0;
         const subjectiveDetails=[];
-        // 결과를 각 문항에 매핑
         for(const result of batchResults){
           const qNum=Number(result.q);
           const score=Math.max(0,Math.min(100,Number(result.score)||0));
           const item=items.find(it=>it.q===qNum);
           const sa=item?item.studentAnswer:"";
           const ca=item?item.correctAnswer:"";
-          // det 갱신
           const idx=updatedDet.findIndex(u=>u.q===qNum&&u.t==="sub");
           if(idx>=0){
             const verdict=score===100?"정답":score===0?"오답":"부분정답";
@@ -431,7 +446,6 @@ export default function App(){
             reasoning:result.reasoning||""
           });
         }
-        // 결과 화면 갱신 (한 번에)
         setGradingProgress({done:subjPending.length,total:subjPending.length});
         setRes(prev=>{
           if(!prev)return prev;
@@ -443,8 +457,6 @@ export default function App(){
           return{...prev,det:updatedDet,subPartial:subPartialNew,score:newScore,subPending:newSubPending,subCorrect:newSubCorrect};
         });
         setGradingSub(false);
-        // 3) 최종 결과를 GAS 에 저장 (학생답안기록 행 갱신)
-        const finalSubPartial=Math.round((subjScoreSum)*100)/100;
         const finalScore=initial.totalQ>0?Math.round(((initial.oc+subjScoreSum)/initial.totalQ)*100):0;
         const finalCorrect=initial.oc+updatedDet.filter(d=>d.t==="sub"&&d.r==="정답").length;
         const finalWrong=initial.ow+updatedDet.filter(d=>d.t==="sub"&&d.r==="오답").length;
@@ -471,13 +483,11 @@ export default function App(){
   return(
     <div style={S.app}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap');*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}body{font-family:'Noto Sans KR',-apple-system,sans-serif;background:${T.bg}}input:focus{outline:none;border-color:${T.gold}!important;box-shadow:0 0 0 3px ${T.goldLight}!important}@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}@keyframes scaleIn{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}@keyframes spin{to{transform:rotate(360deg)}}.fade-up{animation:fadeUp .3s ease-out}.scale-in{animation:scaleIn .2s ease-out}::-webkit-scrollbar{width:3px;height:3px}::-webkit-scrollbar-thumb{background:${T.border};border-radius:3px}`}</style>
-      <header style={S.hdr}><div style={S.hdrIn}><div style={S.logoR}><div style={S.logoM}>채움</div><div><div style={S.hdrT}>채움학원</div><div style={S.hdrS}>답안 제출 시스템</div></div></div>{scr==="input"&&<div style={S.hdrB}>{nm} · {cn||`${gr} ${selTeacher} 선생님`}</div>}</div></header>
-      {/* ═══ 탭 전환 ═══ */}
+      <header style={S.hdr}><div style={S.hdrIn}><div style={S.logoR}><div style={S.logoM}>채움</div><div><div style={S.hdrT}>채움학원</div><div style={S.hdrS}>답안 제출 시스템 ({VERSION})</div></div></div>{scr==="input"&&<div style={S.hdrB}>{nm} · {cn||`${gr} ${selTeacher} 선생님`}</div>}</div></header>
       {scr==="info"&&(<div style={{display:"flex",gap:6,padding:"10px 14px 0"}}>
         <button onClick={()=>setTab("submit")} style={{flex:1,padding:"10px",fontSize:13,fontWeight:700,borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:tab==="submit"?T.goldDark:T.white,color:tab==="submit"?T.white:T.textSub,boxShadow:tab==="submit"?"none":`inset 0 0 0 1.5px ${T.border}`}}>📝 답안 제출</button>
         <button onClick={()=>setTab("history")} style={{flex:1,padding:"10px",fontSize:13,fontWeight:700,borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:tab==="history"?T.goldDark:T.white,color:tab==="history"?T.white:T.textSub,boxShadow:tab==="history"?"none":`inset 0 0 0 1.5px ${T.border}`}}>📊 내 성적</button>
       </div>)}
-      {/* ═══ 정보 입력 (답안 제출 탭) ═══ */}
       {scr==="info"&&tab==="submit"&&(<div style={S.wrap} className="fade-up">
         <div style={S.hero}><div style={{fontSize:36,marginBottom:4}}>✏️</div><h1 style={S.heroT}>답안 제출</h1><p style={S.heroD}>본인 정보와 반을 선택하면<br/>해당 날짜의 시험 목록이 나타나요</p></div>
         <div style={S.card}>
@@ -541,7 +551,6 @@ export default function App(){
           </div>)}
         </div>
       </div>)}
-      {/* ═══ 내 성적 탭 ═══ */}
       {scr==="info"&&tab==="history"&&(<div style={S.wrap} className="fade-up">
         <div style={S.hero}><div style={{fontSize:36,marginBottom:4}}>📊</div><h1 style={S.heroT}>내 성적 조회</h1><p style={S.heroD}>이름과 핸드폰 뒷 4자리로<br/>지금까지 본 시험 결과를 확인하세요</p></div>
         <div style={S.card}>
@@ -564,7 +573,6 @@ export default function App(){
           </div>)}
         </div>
       </div>)}
-      {/* ═══ 답안 입력 ═══ */}
       {scr==="input"&&(<div className="fade-up">
         {!aLoad&&!aNF&&<div style={{padding:"8px 14px",background:T.goldLight,fontSize:12,color:T.goldDeep,fontWeight:600,textAlign:"center"}}>정답 데이터를 불러오는 중...</div>}
         {aNF&&<div style={{padding:"8px 14px",background:T.dangerLight,fontSize:12,color:T.danger,fontWeight:600,textAlign:"center"}}>⚠ 등록된 정답이 없습니다. 답안만 제출되며 나중에 채점됩니다.</div>}
@@ -576,7 +584,9 @@ export default function App(){
         <div style={S.qkR}><button style={S.qkB} onClick={goUA}>⚡ 빈 문항 이동</button><button style={{...S.qkB,color:T.danger,background:T.dangerLight}} onClick={clrAll}>↺ 초기화</button></div>
         <div style={S.qLW}>{secs.map((s,si)=>(<div key={si} ref={el=>sRefs.current[si]=el}>
           <div style={S.secH}><span style={S.secTi}>{qNumMap?`${qNumMap[String(s.start)]||s.start}(${s.start})–${qNumMap[String(s.end)]||s.end}(${s.end})`:s.label}번</span><span style={S.secC}>{ss[si].done}/{ss[si].total}</span></div>
-          {Array.from({length:s.end-s.start+1},(_,j)=>{const qi=s.start-1+j,sel=ans[qi],_tv=tKey?(tKey[String(qi+1)]??tKey[qi+1]??tKey[qi]):null,isSub=_tv==="sub",fi=isFilled(sel);
+          {Array.from({length:s.end-s.start+1},(_,j)=>{const qi=s.start-1+j,sel=ans[qi];
+            // ★ v22.0: isSubjectiveType 으로 "sub", "sa" 모두 인식
+            const _tv=tKey?(tKey[String(qi+1)]??tKey[qi+1]??tKey[qi]):null,isSub=isSubjectiveType(_tv),fi=isFilled(sel);
             const selArr=Array.isArray(sel)?sel:(sel!==null&&sel!==""&&sel!==undefined&&typeof sel!=="string"?[Number(sel)]:[]);
             const multi=selArr.length>1;
             const rawKeyVal=isSub&&aKey?(aKey[String(qi+1)]??aKey[qi+1]??""):"";
@@ -613,7 +623,6 @@ export default function App(){
         </div></div>)}
       </div>)}
       {sending&&(<div style={S.ov}><div style={{...S.mod,padding:"40px 20px"}}><div style={{width:40,height:40,border:`3px solid ${T.borderLight}`,borderTopColor:T.gold,borderRadius:"50%",animation:"spin .8s linear infinite",margin:"0 auto 16px"}}/><p style={{fontSize:15,fontWeight:700,color:T.text}}>채점 중...</p></div></div>)}
-      {/* ═══ 결과 ═══ */}
       {scr==="result"&&!sending&&(<div style={S.wrap} className="fade-up">
         {res?(<>
           <div style={{...S.scCard,background:res.score>=90?`linear-gradient(135deg,${T.accent},#1B5E20)`:res.score>=70?`linear-gradient(135deg,${T.goldDark},${T.goldDeep})`:`linear-gradient(135deg,${T.danger},#B71C1C)`}}>
@@ -623,7 +632,6 @@ export default function App(){
             <div style={{fontSize:12,opacity:.7,marginBottom:8}}>전체 {res.totalQ}문항 중 {res.oc+res.subCorrect}개 정답 · {res.ow}개 오답 · {res.totalQ-(res.to+res.sc)}개 미입력{res.subPending>0?` · ⏳ ${res.subPending}문항 채점중`:""}</div>
             <div style={S.scFB}>{res.score>=90?"🎉 훌륭합니다!":res.score>=70?"💪 잘했어요!":"📚 오답을 복습하세요!"}</div>
           </div>
-          {/* ★ v6: AI 주관식 채점 진행 표시 (배치 방식 — 한 번에 채점) */}
           {gradingSub&&<div style={{padding:"12px 14px",borderRadius:10,marginBottom:14,background:`linear-gradient(90deg,${T.accentLight},${T.goldLight})`,border:`1.5px solid ${T.accent}`,display:"flex",alignItems:"center",gap:10}}>
             <div style={{width:24,height:24,border:`2.5px solid ${T.borderLight}`,borderTopColor:T.accent,borderRadius:"50%",animation:"spin .8s linear infinite"}}/>
             <div style={{flex:1}}>
@@ -648,7 +656,6 @@ export default function App(){
                     <span style={{flex:1,textAlign:"center",fontWeight:600,fontSize:13,color:T.goldDark,wordBreak:"break-word",padding:"0 4px"}}>{d.t==="sub"?(d.c||"–"):vl(d.c)}</span>
                     <span style={{flex:"0 0 60px",textAlign:"center",fontSize:14}}>{d.r==="정답"?"✅":d.r==="오답"?"❌":d.r==="부분정답"?<span style={{fontSize:11,fontWeight:700,color:"#B8860B"}}>{d.partial}</span>:"⏳"}</span>
                   </div>
-                  {/* ★ v5: 주관식 AI 채점 사유 표시 */}
                   {d.t==="sub"&&d.gradeResult&&d.gradeResult.reasoning&&(
                     <div style={{padding:"6px 10px",marginTop:4,marginLeft:72,background:T.white,border:`1px solid ${T.borderLight}`,borderRadius:6,fontSize:11,color:T.textSub,lineHeight:1.5}}>
                       <span style={{fontWeight:700,color:T.accent}}>🤖 AI 채점:</span> {d.gradeResult.reasoning}
@@ -700,8 +707,6 @@ const S={
   cw:{display:"flex",flexWrap:"wrap",gap:6},
   ch:{padding:"8px 14px",borderRadius:20,border:"1.5px solid",fontSize:13,cursor:"pointer",fontFamily:"inherit",transition:"all .12s"},
   chInp:{padding:"8px 14px",borderRadius:20,border:`1.5px solid ${T.border}`,fontSize:13,fontFamily:"inherit",width:80,textAlign:"center"},
-  clPrev:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 14px",background:T.goldPale,borderRadius:10,marginBottom:14,border:`1px solid ${T.goldMuted}`},
-  dtRow:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 14px",background:T.bg,borderRadius:10,marginBottom:8,border:`1px solid ${T.borderLight}`},
   btnG:{width:"100%",padding:"13px",fontSize:15,fontWeight:700,color:T.white,background:`linear-gradient(135deg,${T.gold},${T.goldDark})`,border:"none",borderRadius:12,cursor:"pointer",fontFamily:"inherit",marginTop:8},
   btnO:{flex:1,padding:"12px",fontSize:14,fontWeight:600,color:T.textSub,background:T.white,border:`1.5px solid ${T.border}`,borderRadius:12,cursor:"pointer",fontFamily:"inherit"},
   progA:{padding:"10px 14px 4px",background:T.white,borderBottom:`1px solid ${T.borderLight}`},
