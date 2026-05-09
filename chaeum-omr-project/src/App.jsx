@@ -4,24 +4,24 @@
 // ============================================================
 // 버전 이력
 // ─────────────────────────────────────────
-// v22.2 (2026-04-28)
-//   ★ 주관식 가중치 적용 — 혼합 시험 시 주관식 점수 1.5배 (객관식보다 더 어려움)
-//      전체 주관식이면 가중치 X (모두 동일 배점)
-//   ★ 문법 설명(grammarTip) 표시 — Gemini가 알려주는 학습 팁
-//   ★ Vercel API 65초 timeout 안전장치 (Vercel 60초 한도 + 5초 여유)
+// v22.4 (2026-04-28)
+//   ★ "AI 채점:" → "💬 채움Tip:" 라벨 변경 (학원 브랜딩)
+//   ★ 학생 총평(overallComment) 표시 — 이름 + 강점/약점 1~2줄
+//   ★ "결과가 선생님에게 전송되었습니다" 제거 → 총평으로 대체
+//   ★ "📚 오답을 복습하세요!" (점수 카드) 제거 — 불필요
+//   ★ studentName 을 API에 전달 (개인화된 총평 받기)
+//   ★ 문법 설명도 반말/친근한 톤 (API 측 prompt 변경)
 //
-// v22.1 (2026-04-28)  — API 절대 URL (404 해결)
-//
-// v22.0 (2026-04-28)  — types "sub"/"sa" 호환
-//
+// v22.3  — 100점 만점 + 객관식/주관식 분리 표시
+// v22.2  — 가중치 + 문법 표시 + 65초 timeout
+// v22.1  — API 절대 URL (404 해결)
+// v22.0  — types "sub"/"sa" 호환
 // v6  — 주관식 자동 채점 (Gemini 2.5 Flash, 배치)
-// v5  — 5단계 채점 기준
-// v4  — 시작번호, 다중학교 통합반
 // ============================================================
 
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 
-const VERSION = "v22.2";
+const VERSION = "v22.4";
 const SHEETS_URL = "https://script.google.com/macros/s/AKfycbzablzeV_gVdLoUG-Oh4s02vNmncvteesBn3875WDF3lO176nc4YzAKj7B6zOJVECQO/exec";
 // ★ v22.2: API 절대 URL (CORS 허용)
 const GRADE_SUBJECTIVE_URL = "https://chaeum-teacher.vercel.app/api/grade-subjective";
@@ -136,40 +136,55 @@ function getSecs(n){const s=[];for(let i=0;i<n;i+=SEC){s.push({start:i+1,end:Mat
 // ★ Gemini 주관식 배치 채점 호출 (Vercel API)
 // 1학생의 모든 주관식을 한 번에 채점 → 비용 1/5
 // ============================================================
-async function gradeSubjectiveBatch(items){
-  if(!GRADE_SUBJECTIVE_URL)return [];
-  if(!items||items.length===0)return [];
-  // ★ v22.2: AbortController 로 65초 timeout 안전장치 (서버 응답 안 와도 무한 대기 방지)
+// ★ v22.4: studentName 전달 + overallComment 받기
+//   응답: { results: [...], overallComment: "..." }
+async function gradeSubjectiveBatch(items, studentName, gradingMode){
+  if(!GRADE_SUBJECTIVE_URL)return {results:[],overallComment:""};
+  if(!items||items.length===0)return {results:[],overallComment:""};
+  // ★ v22.7: gradingMode 정규화 (loose=해석/번역, strict=단답형 — 기본 strict)
+  const mode=String(gradingMode||"").toLowerCase()==="loose"?"loose":"strict";
+  // AbortController 로 65초 timeout 안전장치
   const controller=new AbortController();
   const timeoutId=setTimeout(()=>controller.abort(),GRADE_TIMEOUT_MS);
   try{
     const res=await fetch(GRADE_SUBJECTIVE_URL,{
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({items}),
+      body:JSON.stringify({items,studentName:studentName||"",gradingMode:mode}),
       signal:controller.signal
     });
     clearTimeout(timeoutId);
     if(!res.ok){
       const t=await res.text();
-      return items.map(it=>({
-        q:it.q,score:0,category:"ERROR",deductions:[],grammarTip:"",
-        reasoning:`HTTP ${res.status}: ${t.substring(0,100)}`
-      }));
+      return {
+        results:items.map(it=>({
+          q:it.q,score:0,category:"ERROR",deductions:[],grammarTip:"",
+          reasoning:`HTTP ${res.status}: ${t.substring(0,100)}`
+        })),
+        overallComment:""
+      };
     }
     const j=await res.json();
-    if(j.ok&&Array.isArray(j.results))return j.results;
-    return items.map(it=>({
-      q:it.q,score:0,category:"ERROR",deductions:[],grammarTip:"",
-      reasoning:j.error||"채점 응답 없음"
-    }));
+    if(j.ok&&Array.isArray(j.results)){
+      return {results:j.results, overallComment:String(j.overallComment||"")};
+    }
+    return {
+      results:items.map(it=>({
+        q:it.q,score:0,category:"ERROR",deductions:[],grammarTip:"",
+        reasoning:j.error||"채점 응답 없음"
+      })),
+      overallComment:""
+    };
   }catch(e){
     clearTimeout(timeoutId);
     const isTimeout=e.name==="AbortError";
-    return items.map(it=>({
-      q:it.q,score:0,category:isTimeout?"TIMEOUT":"ERROR",deductions:[],grammarTip:"",
-      reasoning:isTimeout?"채점 시간 초과 (65초). 답안이 너무 길거나 서버 부하. 잠시 후 다시 시도하세요.":"호출 실패: "+String(e)
-    }));
+    return {
+      results:items.map(it=>({
+        q:it.q,score:0,category:isTimeout?"TIMEOUT":"ERROR",deductions:[],grammarTip:"",
+        reasoning:isTimeout?"채점 시간 초과 (65초). 답안이 너무 길거나 서버 부하. 잠시 후 다시 시도하세요.":"호출 실패: "+String(e)
+      })),
+      overallComment:""
+    };
   }
 }
 
@@ -228,15 +243,27 @@ function grade(ans,key,types,totalQ){
   const to=oc+ow;
   const subPending=det.filter(d=>d.t==="sub"&&d.r==="채점중").length;
   const subCorrect=det.filter(d=>d.t==="sub"&&d.r==="정답").length;
-  // ★ v22.2: 주관식 가중치 적용
-  //   혼합 시험 (객관식+주관식): 주관식 1.5배 (객관식 1점, 주관식 1.5점)
-  //   전체 주관식 또는 전체 객관식: 동일 배점
+  // ★ v22.2: 주관식 가중치 적용 (혼합 시 1.5배)
   const isMixed=totalObj>0&&totalSub>0;
   const subWeight=isMixed?SUB_WEIGHT_MIXED:1.0;
-  const totalPossible=totalObj+totalSub*subWeight;  // 전체 만점 (가중치 적용)
-  const earnedPoints=oc+subPartialSum*subWeight;     // 학생 점수 (가중치 적용)
-  const score=totalPossible>0?Math.round((earnedPoints/totalPossible)*100):0;
-  return{oc,ow,sc,to,totalObj,totalSub,totalQ:N,subPartial:Math.round(subPartialSum*100)/100,subPending,subCorrect,score,det,subWeight,isMixed};
+  const totalPossible=totalObj+totalSub*subWeight;
+  // ★ v22.3: 100점 만점 기준 객관식/주관식 분리 점수
+  //   객관식 부분 만점 = (객관식 가중치 합 / 전체 가중치) × 100
+  //   주관식 부분 만점 = 100 - 객관식 부분 만점 (반올림 차이 보정)
+  const objMaxScore=totalPossible>0?Math.round((totalObj/totalPossible)*100):0;
+  const subMaxScore=totalPossible>0?(100-objMaxScore):0;
+  // 학생이 받은 객관식/주관식 점수 (각각 만점 기준)
+  const objEarned=totalObj>0?Math.round((oc/totalObj)*objMaxScore):0;
+  const subEarned=totalSub>0?Math.round((subPartialSum/totalSub)*subMaxScore):0;
+  // 총점 = 두 부분 합 (반올림 누적 오차 0~2점 가능)
+  const score=objEarned+subEarned;
+  return{
+    oc,ow,sc,to,totalObj,totalSub,totalQ:N,
+    subPartial:Math.round(subPartialSum*100)/100,
+    subPending,subCorrect,score,det,subWeight,isMixed,
+    // ★ v22.3 추가
+    objMaxScore,subMaxScore,objEarned,subEarned
+  };
 }
 
 function Chip({label,req,opts,val,onChange,custom:allowC}){
@@ -265,6 +292,8 @@ export default function App(){
   const[ans,setAns]=useState([]);const[res,setRes]=useState(null);
   const[conf,setConf]=useState(false);const[sec,setSec]=useState(0);const[wo,setWo]=useState(false);
   const[aKey,setAKey]=useState(null);const[tKey,setTKey]=useState(null);const[qNumMap,setQNumMap]=useState(null);const[aLoad,setALoad]=useState(false);const[aNF,setANF]=useState(false);
+  // ★ v22.7: 주관식 채점 모드 (loose=해석/번역, strict=단답형) — 시험 선택 시 저장
+  const[gradingMode,setGradingMode]=useState("strict");
   const[sending,setSending]=useState(false);const[sendOk,setSendOk]=useState(null);
   const[gradingSub,setGradingSub]=useState(false);
   const[gradingProgress,setGradingProgress]=useState({done:0,total:0});
@@ -355,6 +384,8 @@ export default function App(){
     }
     const _setTag=(ex.setType||ex.round||"").trim();
     setEt(ex.examType + (_setTag?` (${_setTag})`:""));
+    // ★ v22.7: 시험에 저장된 채점 모드 적용 (loose=해석/번역, strict=단답형)
+    setGradingMode(String(ex.gradingMode||"").toLowerCase()==="loose"?"loose":"strict");
     const qTotal=Number(ex.totalQuestions)||100;setTq(qTotal);setCq("");
     setAns(Array(qTotal).fill(null));setScr("input");setALoad(false);setANF(false);
     const hasAns=ex.answers!==undefined&&ex.answers!==null&&ex.answers!=="";
@@ -431,7 +462,10 @@ export default function App(){
           correctAnswer:String(aKey[String(d.q)]??aKey[d.q-1]??""),
           questionContext:""
         }));
-        const batchResults=await gradeSubjectiveBatch(items);
+        // ★ v22.7: studentName + gradingMode 전달 (loose=해석/번역, strict=단답형)
+        const batchRes=await gradeSubjectiveBatch(items, nm, gradingMode);
+        const batchResults=batchRes.results||[];
+        const overallComment=batchRes.overallComment||"";
         const updatedDet=[...initial.det];
         let subjScoreSum=0;
         const subjectiveDetails=[];
@@ -468,21 +502,34 @@ export default function App(){
           if(!prev)return prev;
           const newOc=prev.oc;
           const subPartialNew=Math.round((subjScoreSum)*100)/100;
-          // ★ v22.2: 가중치 적용한 점수 재계산 (혼합 시험 시 주관식 1.5배)
+          // ★ v22.3: 100점 만점 분리 점수 재계산
           const subWeight=prev.subWeight||1.0;
           const totalPossible=prev.totalObj+prev.totalSub*subWeight;
-          const earnedPoints=newOc+subjScoreSum*subWeight;
-          const newScore=totalPossible>0?Math.round((earnedPoints/totalPossible)*100):0;
+          const objMax=totalPossible>0?Math.round((prev.totalObj/totalPossible)*100):0;
+          const subMax=totalPossible>0?(100-objMax):0;
+          const newObjEarned=prev.totalObj>0?Math.round((newOc/prev.totalObj)*objMax):0;
+          const newSubEarned=prev.totalSub>0?Math.round((subjScoreSum/prev.totalSub)*subMax):0;
+          const newScore=newObjEarned+newSubEarned;
           const newSubPending=updatedDet.filter(d=>d.t==="sub"&&d.r==="채점중").length;
           const newSubCorrect=updatedDet.filter(d=>d.t==="sub"&&d.r==="정답").length;
-          return{...prev,det:updatedDet,subPartial:subPartialNew,score:newScore,subPending:newSubPending,subCorrect:newSubCorrect};
+          return{
+            ...prev,det:updatedDet,subPartial:subPartialNew,score:newScore,
+            subPending:newSubPending,subCorrect:newSubCorrect,
+            objMaxScore:objMax,subMaxScore:subMax,
+            objEarned:newObjEarned,subEarned:newSubEarned,
+            // ★ v22.4: 학생 총평 (이름 + 강점/약점 1~2줄)
+            overallComment:overallComment
+          };
         });
         setGradingSub(false);
-        // ★ v22.2: 최종 점수도 가중치 적용
+        // ★ v22.3: 최종 점수도 100점 만점 분리 계산
         const subWeight=initial.subWeight||1.0;
         const totalPossibleFinal=initial.totalObj+initial.totalSub*subWeight;
-        const earnedPointsFinal=initial.oc+subjScoreSum*subWeight;
-        const finalScore=totalPossibleFinal>0?Math.round((earnedPointsFinal/totalPossibleFinal)*100):0;
+        const objMaxF=totalPossibleFinal>0?Math.round((initial.totalObj/totalPossibleFinal)*100):0;
+        const subMaxF=totalPossibleFinal>0?(100-objMaxF):0;
+        const objEarnedF=initial.totalObj>0?Math.round((initial.oc/initial.totalObj)*objMaxF):0;
+        const subEarnedF=initial.totalSub>0?Math.round((subjScoreSum/initial.totalSub)*subMaxF):0;
+        const finalScore=objEarnedF+subEarnedF;
         const finalCorrect=initial.oc+updatedDet.filter(d=>d.t==="sub"&&d.r==="정답").length;
         const finalWrong=initial.ow+updatedDet.filter(d=>d.t==="sub"&&d.r==="오답").length;
         const finalWrongQs=updatedDet.filter(d=>d.r==="오답").map(d=>d.q);
@@ -501,7 +548,7 @@ export default function App(){
       }
     }
   };
-  const hReset=()=>{setAns(Array(qc).fill(null));setRes(null);setWo(false);setSendOk(null);setScr("info");setSec(0);setNm("");setSub("");setGr("");setLv("");setEt("");setSelTeacher("");setAKey(null);setTKey(null);setQNumMap(null);setALoad(false);setANF(false);setTq(100);setCq("");setPd(todayIso());setTodayExams(null);setGradingSub(false);setGradingProgress({done:0,total:0});};
+  const hReset=()=>{setAns(Array(qc).fill(null));setRes(null);setWo(false);setSendOk(null);setScr("info");setSec(0);setNm("");setSub("");setGr("");setLv("");setEt("");setSelTeacher("");setAKey(null);setTKey(null);setQNumMap(null);setALoad(false);setANF(false);setTq(100);setCq("");setPd(todayIso());setTodayExams(null);setGradingSub(false);setGradingProgress({done:0,total:0});setGradingMode("strict");};
   const scTo=(i)=>{setSec(i);sRefs.current[i]?.scrollIntoView({behavior:"smooth",block:"start"});};
   const goUA=()=>{const i=ans.findIndex(a=>a===null||a==="");if(i===-1)return alert("모든 문항에 답했습니다!");setSec(Math.floor(i/SEC));setTimeout(()=>{document.getElementById(`q-${i}`)?.scrollIntoView({behavior:"smooth",block:"center"});},100);};
   const clrAll=()=>{if(window.confirm("모든 답안을 초기화할까요?"))setAns(Array(qc).fill(null));};
@@ -655,18 +702,48 @@ export default function App(){
             <div style={{fontSize:56,fontWeight:800,lineHeight:1.1,margin:"4px 0"}}>{res.score}<span style={{fontSize:22}}>점</span></div>
             <div style={{fontSize:13,opacity:.85,marginBottom:4}}>{et} · {ds}</div>
             <div style={{fontSize:12,opacity:.7,marginBottom:4}}>전체 {res.totalQ}문항 중 {res.oc+res.subCorrect}개 정답 · {res.ow}개 오답 · {res.totalQ-(res.to+res.sc)}개 미입력{res.subPending>0?` · ⏳ ${res.subPending}문항 채점중`:""}</div>
-            {res.isMixed&&<div style={{fontSize:11,opacity:.65,marginBottom:8}}>📌 객관식 1점 · 주관식 1.5점 가중치 적용 (만점 {res.totalObj+Math.round(res.totalSub*1.5*10)/10}점)</div>}
-            <div style={S.scFB}>{res.score>=90?"🎉 훌륭합니다!":res.score>=70?"💪 잘했어요!":"📚 오답을 복습하세요!"}</div>
+            {/* ★ v22.3: 100점 만점 명시 + 가중치 안내 */}
+            <div style={{fontSize:11,opacity:.65,marginBottom:0}}>📌 100점 만점{res.isMixed?` (객관식 ${res.objMaxScore}점 + 주관식 ${res.subMaxScore}점, 주관식 1.5배 가중치)`:""}</div>
+            {/* ★ v22.4: "오답을 복습하세요!" 제거 — 총평으로 대체 */}
           </div>
           {gradingSub&&<div style={{padding:"12px 14px",borderRadius:10,marginBottom:14,background:`linear-gradient(90deg,${T.accentLight},${T.goldLight})`,border:`1.5px solid ${T.accent}`,display:"flex",alignItems:"center",gap:10}}>
             <div style={{width:24,height:24,border:`2.5px solid ${T.borderLight}`,borderTopColor:T.accent,borderRadius:"50%",animation:"spin .8s linear infinite"}}/>
             <div style={{flex:1}}>
-              <div style={{fontSize:13,fontWeight:700,color:T.accent}}>🤖 AI 주관식 채점 중...</div>
+              <div style={{fontSize:13,fontWeight:700,color:T.accent}}>💬 채움Tip 채점 중...</div>
               <div style={{fontSize:11,color:T.textSub,marginTop:2}}>{gradingProgress.total}개 주관식을 한 번에 채점하고 있어요 (3~8초 소요)</div>
             </div>
           </div>}
-          <div style={{padding:"10px 14px",borderRadius:10,marginBottom:14,fontSize:13,fontWeight:600,textAlign:"center",background:sendOk!==false?T.accentLight:T.dangerLight,color:sendOk!==false?T.accent:T.danger}}>{sendOk!==false?"✅ 결과가 선생님에게 전송되었습니다":"⚠️ 전송 실패"}</div>
-          <div style={S.stRow}><SC i="✅" l="정답" v={res.oc+res.subCorrect} c={T.accent}/><SC i="❌" l="오답" v={res.ow} c={T.danger}/><SC i="📝" l="전체" v={res.totalQ} c={T.textSub}/><SC i="📊" l="점수" v={`${res.score}점`} c={T.goldDark}/>{res.sc>0&&<SC i="✍️" l="주관식" v={`${res.sc}`} c={T.textSub}/>}</div>
+          {/* ★ v22.4: "결과가 선생님에게 전송되었습니다" → 학생 총평 (이름 + 강점/약점) */}
+          {res.overallComment&&!gradingSub&&(
+            <div style={{padding:"14px 16px",borderRadius:12,marginBottom:14,background:`linear-gradient(135deg,${T.goldPale},${T.goldLight})`,border:`1.5px solid ${T.goldMuted}`}}>
+              <div style={{fontSize:11,fontWeight:700,color:T.goldDark,marginBottom:6}}>💬 채움학원 선생님이 학생에게</div>
+              <div style={{fontSize:13,fontWeight:600,color:T.goldDeep,lineHeight:1.6,whiteSpace:"pre-wrap"}}>{res.overallComment}</div>
+            </div>
+          )}
+          {sendOk===false&&<div style={{padding:"8px 14px",borderRadius:10,marginBottom:14,fontSize:12,fontWeight:600,textAlign:"center",background:T.dangerLight,color:T.danger}}>⚠️ 결과 전송 실패</div>}
+          <div style={S.stRow}><SC i="✅" l="정답" v={res.oc+res.subCorrect} c={T.accent}/><SC i="❌" l="오답" v={res.ow} c={T.danger}/><SC i="📝" l="전체" v={res.totalQ} c={T.textSub}/><SC i="📊" l="점수" v={`${res.score}점`} c={T.goldDark}/></div>
+          {/* ★ v22.3: 객관식/주관식 분리 통계 카드 (혼합 시험만) */}
+          {res.isMixed&&(
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+              <div style={{background:T.white,border:`1.5px solid ${T.goldMuted}`,borderRadius:12,padding:"12px 10px"}}>
+                <div style={{fontSize:11,color:T.textMuted,fontWeight:600,marginBottom:4}}>✏️ 객관식</div>
+                <div style={{fontSize:13,fontWeight:700,color:T.text,marginBottom:6}}>{res.totalObj}문항 중 {res.oc}개 정답</div>
+                <div style={{display:"flex",alignItems:"baseline",gap:4}}>
+                  <span style={{fontSize:22,fontWeight:800,color:T.goldDark}}>{res.objEarned}</span>
+                  <span style={{fontSize:12,color:T.textMuted}}>/ {res.objMaxScore}점</span>
+                </div>
+              </div>
+              <div style={{background:T.white,border:`1.5px solid ${T.accent}50`,borderRadius:12,padding:"12px 10px"}}>
+                <div style={{fontSize:11,color:T.textMuted,fontWeight:600,marginBottom:4}}>📝 주관식</div>
+                <div style={{fontSize:13,fontWeight:700,color:T.text,marginBottom:6}}>{res.totalSub}문항 중 {res.subCorrect}개 정답{res.subPartial>res.subCorrect?` (부분점수 ${(res.subPartial-res.subCorrect).toFixed(1)})`:""}</div>
+                <div style={{display:"flex",alignItems:"baseline",gap:4}}>
+                  <span style={{fontSize:22,fontWeight:800,color:T.accent}}>{res.subEarned}</span>
+                  <span style={{fontSize:12,color:T.textMuted}}>/ {res.subMaxScore}점</span>
+                  {res.subPending>0&&<span style={{fontSize:10,color:"#E65100",marginLeft:4}}>⏳ {res.subPending}개 채점중</span>}
+                </div>
+              </div>
+            </div>
+          )}
           {(res.totalQ-(res.to+res.sc))>0&&<div style={{padding:"8px 14px",borderRadius:10,marginBottom:10,fontSize:12,fontWeight:600,textAlign:"center",background:"#FFF3E0",color:"#E65100"}}>미입력 {res.totalQ-(res.to+res.sc)}문항은 0점 처리됩니다.</div>}
           <div style={S.card}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}><h3 style={{fontSize:15,fontWeight:700,color:T.text}}>정오표</h3>
@@ -684,7 +761,7 @@ export default function App(){
                   </div>
                   {d.t==="sub"&&d.gradeResult&&d.gradeResult.reasoning&&(
                     <div style={{padding:"8px 12px",marginTop:4,marginLeft:72,background:T.white,border:`1px solid ${T.borderLight}`,borderRadius:8,fontSize:11,color:T.textSub,lineHeight:1.6}}>
-                      <div><span style={{fontWeight:700,color:T.accent}}>🤖 AI 채점:</span> {d.gradeResult.reasoning}</div>
+                      <div><span style={{fontWeight:700,color:T.accent}}>💬 채움Tip:</span> {d.gradeResult.reasoning}</div>
                       {d.gradeResult.deductions&&d.gradeResult.deductions.length>0&&(
                         <div style={{marginTop:5,display:"flex",flexWrap:"wrap",gap:4}}>
                           {d.gradeResult.deductions.map((dd,di)=>(
@@ -724,7 +801,7 @@ export default function App(){
           <div style={{fontSize:13,fontWeight:700,color:T.accent,marginBottom:4}}>📖 오답 복습 안내</div>
           <div style={{fontSize:12,color:T.textSub}}>틀린 문항을 위 정오표에서 확인하고 복습하세요!<br/>오답노트가 자동으로 만들어집니다.</div>
         </div>}
-        <div style={{marginBottom:20}}><button style={{...S.btnG,opacity:gradingSub?0.5:1}} onClick={hReset} disabled={gradingSub}>{gradingSub?"🤖 AI 채점 중... 잠시만요":"새 시험 보기"}</button></div>
+        <div style={{marginBottom:20}}><button style={{...S.btnG,opacity:gradingSub?0.5:1}} onClick={hReset} disabled={gradingSub}>{gradingSub?"💬 채움Tip 채점 중... 잠시만요":"새 시험 보기"}</button></div>
       </div>)}
     </div>
   );
