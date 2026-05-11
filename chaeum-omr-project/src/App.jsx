@@ -4,6 +4,10 @@
 // ============================================================
 // 버전 이력
 // ─────────────────────────────────────────
+// v23.7 (2026-05-11)
+//   ★ 주관식 피드백 포맷 변경 — 채움Tip 제거, DiffView(수정·추가 가이드) + 문법팁 형식
+//   ★ LOOSE 모드 diff 적용 — 구두점·공백 완화 (선생님앱과 동일 기준)
+//
 // v23.6 (2026-05-11)
 //   ★ 3중 자동 갱신 — 정답 수정 시 학생도 즉시 새 점수 확인
 //     · (1) 제출 시점에 view_answer_key 재조회 — 시험 중 선생님이 정답 고쳐도 최신 기준 채점
@@ -29,7 +33,7 @@
 
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 
-const VERSION = "v23.6";
+const VERSION = "v23.7";
 const SHEETS_URL = "https://script.google.com/macros/s/AKfycbzablzeV_gVdLoUG-Oh4s02vNmncvteesBn3875WDF3lO176nc4YzAKj7B6zOJVECQO/exec";
 // ★ v22.2: API 절대 URL (CORS 허용)
 const GRADE_SUBJECTIVE_URL = "https://chaeum-teacher.vercel.app/api/grade-subjective";
@@ -282,6 +286,82 @@ function Chip({label,req,opts,val,onChange,custom:allowC}){
     <div style={S.cw}>{opts.map(o=>{const a=(!c&&val===o)||(c&&o==="기타");return(<button key={o} onClick={()=>h(o)} style={{...S.ch,background:a?T.goldDark:T.white,color:a?T.white:T.textSub,borderColor:a?T.goldDark:T.border,fontWeight:a?700:500}}>{o}</button>);})}</div>
     {c&&allowC&&<input style={{...S.inp,marginTop:6}} placeholder="직접 입력" value={cv} onChange={e=>{setCv(e.target.value);onChange(e.target.value);}}/>}
   </div>);
+}
+
+// ─── 주관식 diff 유틸 (LOOSE 모드: 문장 끝 구두점·아포스트로피·공백 완화) ───
+function diffWordsKor(correct, student) {
+  const _prep = s => String(s||"").trim().replace(/[.!?]+$/, '').replace(/\s+/g, ' ');
+  const _tok = s => _prep(s).split(/(\s+|[,;:"])/).filter(t => t && !/^\s+$/.test(t));
+  const a = _tok(correct), b = _tok(student);
+  const m = a.length, n = b.length;
+  const dp = Array(m+1).fill(null).map(()=>Array(n+1).fill(0));
+  for (let ii=1; ii<=m; ii++) for (let jj=1; jj<=n; jj++) {
+    if (a[ii-1]===b[jj-1]) dp[ii][jj]=dp[ii-1][jj-1]+1;
+    else dp[ii][jj]=Math.max(dp[ii-1][jj],dp[ii][jj-1]);
+  }
+  const ops=[];
+  let i=m,j=n;
+  while(i>0&&j>0){
+    if(a[i-1]===b[j-1]){ops.push({op:"keep",text:a[i-1]});i--;j--;}
+    else if(dp[i-1][j]>=dp[i][j-1]){ops.push({op:"add",text:a[i-1]});i--;}
+    else{ops.push({op:"del",text:b[j-1]});j--;}
+  }
+  while(i>0){ops.push({op:"add",text:a[i-1]});i--;}
+  while(j>0){ops.push({op:"del",text:b[j-1]});j--;}
+  return ops.reverse();
+}
+function groupDiffOps(ops){
+  const groups=[];let i=0;
+  while(i<ops.length){
+    const o=ops[i];
+    if(o.op==="keep"){groups.push({type:"keep",text:o.text});i++;}
+    else{
+      const dels=[];
+      while(i<ops.length&&ops[i].op==="del"){dels.push(ops[i].text);i++;}
+      const adds=[];
+      while(i<ops.length&&ops[i].op==="add"){adds.push(ops[i].text);i++;}
+      if(dels.length>0&&adds.length>0){groups.push({type:"replace",from:dels.join(" "),to:adds.join(" ")});}
+      else if(dels.length>0){groups.push({type:"del",text:dels.join(" ")});}
+      else if(adds.length>0){groups.push({type:"add",text:adds.join(" ")});}
+    }
+  }
+  return groups;
+}
+function DiffView({correct,student,T}){
+  if(!correct&&!student)return null;
+  const ops=diffWordsKor(correct,student);
+  const groups=groupDiffOps(ops);
+  const guides=[];
+  groups.forEach(g=>{if(g.type==="replace"||g.type==="add")guides.push(g);});
+  return(
+    <>
+      <span style={{lineHeight:1.7}}>
+        {groups.map((g,i)=>{
+          if(g.type==="keep")return<span key={i}>{g.text} </span>;
+          if(g.type==="del"||g.type==="replace"){
+            const txt=g.type==="del"?g.text:g.from;
+            return<span key={i} style={{background:"#ffebee",color:"#C62828",textDecoration:"line-through",padding:"0 3px",borderRadius:3,margin:"0 1px"}} title="빼야 함">{txt} </span>;
+          }
+          return null;
+        })}
+      </span>
+      {guides.length>0&&(
+        <div style={{marginTop:6,padding:"6px 10px",background:"#f0f9f0",border:"1px dashed #66bb6a",borderRadius:4,fontSize:11}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#2E7D32",marginBottom:3}}>🔧 수정·추가 가이드</div>
+          {guides.map((g,i)=>(
+            <div key={i} style={{color:"#1B5E20",lineHeight:1.6}}>
+              <b>{i+1})</b>{" "}
+              {g.type==="replace"?(
+                <><span style={{color:"#C62828",fontWeight:600}}>{g.from}</span><span style={{margin:"0 4px",color:"#888"}}>→</span><b style={{color:"#2E7D32"}}>{g.to}</b></>
+              ):(
+                <><b style={{color:"#2E7D32"}}>{g.text}</b><span style={{marginLeft:4,fontSize:10,color:"#666"}}>(추가)</span></>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
 }
 
 export default function App(){
@@ -858,7 +938,7 @@ export default function App(){
           {gradingSub&&<div style={{padding:"12px 14px",borderRadius:10,marginBottom:14,background:`linear-gradient(90deg,${T.accentLight},${T.goldLight})`,border:`1.5px solid ${T.accent}`,display:"flex",alignItems:"center",gap:10}}>
             <div style={{width:24,height:24,border:`2.5px solid ${T.borderLight}`,borderTopColor:T.accent,borderRadius:"50%",animation:"spin .8s linear infinite"}}/>
             <div style={{flex:1}}>
-              <div style={{fontSize:13,fontWeight:700,color:T.accent}}>💬 채움Tip 채점 중...</div>
+              <div style={{fontSize:13,fontWeight:700,color:T.accent}}>📝 주관식 채점 중...</div>
               <div style={{fontSize:11,color:T.textSub,marginTop:2}}>{gradingProgress.total}개 주관식을 한 번에 채점하고 있어요 (3~8초 소요)</div>
             </div>
           </div>}
@@ -908,26 +988,25 @@ export default function App(){
                     <span style={{flex:1,textAlign:"center",fontWeight:600,fontSize:13,color:T.goldDark,wordBreak:"break-word",padding:"0 4px"}}>{d.t==="sub"?(d.c||"–"):vl(d.c)}</span>
                     <span style={{flex:"0 0 60px",textAlign:"center",fontSize:14}}>{d.r==="정답"?"✅":d.r==="오답"?"❌":d.r==="부분정답"?<span style={{fontSize:11,fontWeight:700,color:"#B8860B"}}>{d.partial}</span>:"⏳"}</span>
                   </div>
-                  {d.t==="sub"&&d.gradeResult&&d.gradeResult.reasoning&&(
+                  {/* ★ v23.7: 오답·부분정답 주관식 — DiffView(수정가이드) + 문법팁, 채움Tip 제거 */}
+                  {d.t==="sub"&&d.r!=="채점중"&&d.r!=="정답"&&(
                     <div style={{padding:"8px 12px",marginTop:4,marginLeft:72,background:T.white,border:`1px solid ${T.borderLight}`,borderRadius:8,fontSize:11,color:T.textSub,lineHeight:1.6}}>
-                      <div><span style={{fontWeight:700,color:T.accent}}>💬 채움Tip:</span> {d.gradeResult.reasoning}</div>
-                      {d.gradeResult.deductions&&d.gradeResult.deductions.length>0&&(
-                        <div style={{marginTop:5,display:"flex",flexWrap:"wrap",gap:4}}>
-                          {d.gradeResult.deductions.map((dd,di)=>(
-                            <span key={di} style={{padding:"2px 6px",background:T.dangerLight,color:T.danger,borderRadius:4,fontSize:10,fontWeight:600}}>
-                              {dd.blank?`(${dd.blank}) `:""}{dd.type} {dd.amount}%
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      {/* ★ v22.2: 문법 설명 표시 (학생 학습용) */}
-                      {d.gradeResult.grammarTip&&(
+                      <div style={{marginBottom:3}}><span style={{fontWeight:700,color:T.accent,marginRight:4}}>✓ 정답:</span><span style={{color:T.text,fontWeight:500}}>{d.c||"-"}</span></div>
+                      <div style={{marginBottom:3}}>
+                        <span style={{fontWeight:700,color:d.r==="오답"?T.danger:T.goldDark,marginRight:4}}>📝 학생답:</span>
+                        {d.s?<DiffView correct={d.c||""} student={d.s||""} T={T}/>:<span style={{color:T.danger,fontStyle:"italic"}}>(빈칸)</span>}
+                      </div>
+                      <div style={{fontSize:9,color:T.textMuted,marginBottom:3}}>
+                        <span style={{background:"#e8f5e9",color:"#2E7D32",padding:"0 4px",borderRadius:2,marginRight:4}}>초록</span>= 추가 필요 ·
+                        <span style={{background:"#ffebee",color:"#C62828",padding:"0 4px",borderRadius:2,margin:"0 4px",textDecoration:"line-through"}}>빨강</span>= 빼야 함
+                      </div>
+                      {/* ★ v23.7: 문법팁 유지 (채움Tip 제거) */}
+                      {d.gradeResult?.grammarTip&&(
                         <div style={{marginTop:6,padding:"6px 8px",background:"#E3F2FD",border:`1px solid #90CAF9`,borderRadius:6,fontSize:11,color:"#0D47A1",lineHeight:1.6,whiteSpace:"pre-wrap"}}>
                           <span style={{fontWeight:700}}>💡 문법 팁:</span> {d.gradeResult.grammarTip}
                         </div>
                       )}
-                      {/* ★ v22.2: 빈칸별 점수 (멀티블랭크인 경우) */}
-                      {d.gradeResult.blanks&&d.gradeResult.blanks.length>0&&(
+                      {d.gradeResult?.blanks&&d.gradeResult.blanks.length>0&&(
                         <div style={{marginTop:6,fontSize:10,color:T.textMuted}}>
                           빈칸별: {d.gradeResult.blanks.map(b=>`(${b.index}) ${b.score}점`).join(' · ')}
                         </div>
@@ -950,7 +1029,7 @@ export default function App(){
           <div style={{fontSize:13,fontWeight:700,color:T.accent,marginBottom:4}}>📖 오답 복습 안내</div>
           <div style={{fontSize:12,color:T.textSub}}>틀린 문항을 위 정오표에서 확인하고 복습하세요!<br/>오답노트가 자동으로 만들어집니다.</div>
         </div>}
-        <div style={{marginBottom:20}}><button style={{...S.btnG,opacity:gradingSub?0.5:1}} onClick={hReset} disabled={gradingSub}>{gradingSub?"💬 채움Tip 채점 중... 잠시만요":"새 시험 보기"}</button></div>
+        <div style={{marginBottom:20}}><button style={{...S.btnG,opacity:gradingSub?0.5:1}} onClick={hReset} disabled={gradingSub}>{gradingSub?"📝 주관식 채점 중... 잠시만요":"새 시험 보기"}</button></div>
       </div>)}
     </div>
   );
