@@ -5,11 +5,12 @@
 // 버전 이력
 // ─────────────────────────────────────────
 // v23.6 (2026-05-11)
-//   ★ 정답 새로고침 버튼 추가 — 선생님이 정답을 고친 직후 학생이 즉시 새 점수 확인
-//     · 결과 화면 상단에 "🔄 정답 새로고침" 버튼 노출
-//     · view_answer_key 로 최신 정답 재조회 → grade() 재실행 → res 즉시 갱신
-//     · 주관식 부분점수·총평은 보존 (AI 재호출 없음)
+//   ★ 3중 자동 갱신 — 정답 수정 시 학생도 즉시 새 점수 확인
+//     · (1) 제출 시점에 view_answer_key 재조회 — 시험 중 선생님이 정답 고쳐도 최신 기준 채점
+//     · (2) 결과 화면 탭 복귀 시 visibilityChange 이벤트로 백그라운드 재조회 (같은 기기 시나리오)
+//     · (3) "🔄 정답 새로고침" 버튼 — 다른 기기·수동 갱신용
 //   ★ currentExam state 추가 — 새로고침 시 folderId 기반 재조회
+//   ★ 주관식 부분점수·총평은 보존 (AI 재호출 없음)
 //
 // v22.4 (2026-04-28)
 //   ★ "AI 채점:" → "💬 채움Tip:" 라벨 변경 (학원 브랜딩)
@@ -319,6 +320,58 @@ export default function App(){
     fetch(`${SHEETS_URL}?action=list_teachers`)
       .then(r=>r.json()).then(d=>{if(d.result==="ok")setTeacherList(d.teachers||[]);}).catch(()=>{});
   },[]);
+  // ★ v23.6: 결과 화면에서 탭 복귀 시 자동 재조회
+  //   선생님 앱에서 정답 수정 후 학생 앱으로 돌아오면 자동으로 새 점수 반영
+  //   (같은 기기·다른 탭 시나리오 대응. 다른 기기면 🔄 새로고침 버튼 사용)
+  useEffect(()=>{
+    if(scr!=="result"||!currentExam)return;
+    let lastRefresh=Date.now();
+    const onVisible=()=>{
+      if(document.visibilityState!=="visible")return;
+      // 방금 켰으면 (3초 이내) 스킵 — 제출 직후 불필요한 재호출 방지
+      if(Date.now()-lastRefresh<3000)return;
+      lastRefresh=Date.now();
+      // 조용히 백그라운드 재조회 (alert 없이)
+      (async()=>{
+        try{
+          const params=new URLSearchParams();
+          if(currentExam.folderId)params.set("folderId",currentExam.folderId);
+          else{
+            params.set("subject",currentExam.subject||sub||"");
+            params.set("grade",currentExam.grade||gr||"");
+            params.set("level",currentExam.level||lv||"");
+            params.set("examType",currentExam.examType||"");
+            if(currentExam.teacher)params.set("teacher",currentExam.teacher);
+            if(currentExam.examDate)params.set("date",currentExam.examDate);
+          }
+          const rr=await fetch(`${SHEETS_URL}?action=view_answer_key&${params.toString()}`);
+          const dd=await rr.json();
+          if(dd.result!=="ok")return;
+          const fa=normalizeAnswerData(dd.answers||{});
+          const ft=dd.types?normalizeAnswerData(dd.types):null;
+          // 정답이 바뀌었으면 재채점
+          const prevHash=JSON.stringify(aKey||{});
+          const newHash=JSON.stringify(fa);
+          if(prevHash===newHash)return; // 변동 없음
+          setAKey(fa);setTKey(ft);
+          const fresh=grade(ans,fa,ft,qc);
+          // 주관식 보존
+          if(res&&res.det){
+            fresh.det=fresh.det.map(d=>{
+              if(d.t!=="sub")return d;
+              const prev=res.det.find(p=>p.q===d.q&&p.t==="sub");
+              if(prev&&prev.gradeResult)return{...d,gradeResult:prev.gradeResult,partial:prev.partial,r:prev.r};
+              return d;
+            });
+            if(res.overallComment)fresh.overallComment=res.overallComment;
+          }
+          setRes(fresh);
+        }catch(_e){/* 조용히 실패 */}
+      })();
+    };
+    document.addEventListener("visibilitychange",onVisible);
+    return ()=>document.removeEventListener("visibilitychange",onVisible);
+  },[scr,currentExam,ans,qc,aKey,res,sub,gr,lv]);
   const hAns=useCallback((i,v)=>{setAns(p=>{
     const n=[...p];
     const cur=n[i];
@@ -496,7 +549,31 @@ export default function App(){
   // ============================================================
   const hFinal=async()=>{
     setConf(false);setSending(true);
-    const initial=aKey?grade(ans,aKey,tKey,qc):null;setRes(initial);
+    // ★ v23.6: 제출 직전 최신 정답 재조회 — 선생님이 시험 중에 정답을 수정한 경우 자동 반영
+    //   (caching은 GAS 가 update_answer_key 시 무효화하므로 항상 최신 데이터)
+    let effAKey=aKey, effTKey=tKey;
+    if(currentExam){
+      try{
+        const params=new URLSearchParams();
+        if(currentExam.folderId)params.set("folderId",currentExam.folderId);
+        else{
+          params.set("subject",currentExam.subject||sub||"");
+          params.set("grade",currentExam.grade||gr||"");
+          params.set("level",currentExam.level||lv||"");
+          params.set("examType",currentExam.examType||"");
+          if(currentExam.teacher)params.set("teacher",currentExam.teacher);
+          if(currentExam.examDate)params.set("date",currentExam.examDate);
+        }
+        const rr=await fetch(`${SHEETS_URL}?action=view_answer_key&${params.toString()}`);
+        const dd=await rr.json();
+        if(dd.result==="ok"){
+          effAKey=normalizeAnswerData(dd.answers||{});
+          effTKey=dd.types?normalizeAnswerData(dd.types):tKey;
+          setAKey(effAKey);setTKey(effTKey);
+        }
+      }catch(_e){/* 네트워크 실패 시 기존 aKey 사용 — 채점 자체는 진행 */}
+    }
+    const initial=effAKey?grade(ans,effAKey,effTKey,qc):null;setRes(initial);
     const ansSerialized=ans.map(v=>Array.isArray(v)?v.join(","):v);
     try{
       await fetch(SHEETS_URL,{method:"POST",mode:"no-cors",headers:{"Content-Type":"application/json"},
@@ -518,13 +595,14 @@ export default function App(){
     // 주관식 배치 채점
     if(initial){
       const subjPending=initial.det.filter(d=>d.t==="sub"&&d.r==="채점중");
-      if(subjPending.length>0&&aKey){
+      // ★ v23.6: 주관식 채점도 재조회된 effAKey 사용 (setAKey 는 비동기라 state 미반영 가능)
+      if(subjPending.length>0&&effAKey){
         setGradingSub(true);
         setGradingProgress({done:0,total:subjPending.length});
         const items=subjPending.map(d=>({
           q:d.q,
           studentAnswer:String(ans[d.q-1]||""),
-          correctAnswer:String(aKey[String(d.q)]??aKey[d.q-1]??""),
+          correctAnswer:String(effAKey[String(d.q)]??effAKey[d.q-1]??""),
           questionContext:""
         }));
         // ★ v22.7: studentName + gradingMode 전달 (loose=해석/번역, strict=단답형)
