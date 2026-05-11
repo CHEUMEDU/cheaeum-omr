@@ -4,6 +4,13 @@
 // ============================================================
 // 버전 이력
 // ─────────────────────────────────────────
+// v23.6 (2026-05-11)
+//   ★ 정답 새로고침 버튼 추가 — 선생님이 정답을 고친 직후 학생이 즉시 새 점수 확인
+//     · 결과 화면 상단에 "🔄 정답 새로고침" 버튼 노출
+//     · view_answer_key 로 최신 정답 재조회 → grade() 재실행 → res 즉시 갱신
+//     · 주관식 부분점수·총평은 보존 (AI 재호출 없음)
+//   ★ currentExam state 추가 — 새로고침 시 folderId 기반 재조회
+//
 // v22.4 (2026-04-28)
 //   ★ "AI 채점:" → "💬 채움Tip:" 라벨 변경 (학원 브랜딩)
 //   ★ 학생 총평(overallComment) 표시 — 이름 + 강점/약점 1~2줄
@@ -21,7 +28,7 @@
 
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 
-const VERSION = "v22.4";
+const VERSION = "v23.6";
 const SHEETS_URL = "https://script.google.com/macros/s/AKfycbzablzeV_gVdLoUG-Oh4s02vNmncvteesBn3875WDF3lO176nc4YzAKj7B6zOJVECQO/exec";
 // ★ v22.2: API 절대 URL (CORS 허용)
 const GRADE_SUBJECTIVE_URL = "https://chaeum-teacher.vercel.app/api/grade-subjective";
@@ -294,6 +301,9 @@ export default function App(){
   const[aKey,setAKey]=useState(null);const[tKey,setTKey]=useState(null);const[qNumMap,setQNumMap]=useState(null);const[aLoad,setALoad]=useState(false);const[aNF,setANF]=useState(false);
   // ★ v22.7: 주관식 채점 모드 (loose=해석/번역, strict=단답형) — 시험 선택 시 저장
   const[gradingMode,setGradingMode]=useState("strict");
+  // ★ v23.6: 현재 시험 메타 (결과 새로고침 시 view_answer_key 재조회용)
+  const[currentExam,setCurrentExam]=useState(null);
+  const[refreshing,setRefreshing]=useState(false);
   const[sending,setSending]=useState(false);const[sendOk,setSendOk]=useState(null);
   const[gradingSub,setGradingSub]=useState(false);
   const[gradingProgress,setGradingProgress]=useState({done:0,total:0});
@@ -377,6 +387,8 @@ export default function App(){
     setTodayExams(exams);setLoadingExams(false);
   };
   const hPickExam=(ex)=>{
+    // ★ v23.6: 새로고침용 시험 메타 저장 (folderId, setType, examType, date 등)
+    setCurrentExam(ex);
     if(ex.className){
       const parts=ex.className.split(/\s+/);
       setSub(parts[0]||"");setLv((parts[2]||"").replace(/반$/,"")||"");
@@ -424,6 +436,59 @@ export default function App(){
     setLoadingHist(true);setHistErr("");setHistory(null);
     fetch(`${SHEETS_URL}?action=student_history&name=${encodeURIComponent(nm.trim())}&phone=${encodeURIComponent(ph)}`)
       .then(r=>r.json()).then(d=>{if(d.result==="ok"){setHistory(d.records||[]);}else{setHistErr(d.message||"조회 실패");setHistory([]);}setLoadingHist(false);}).catch(()=>{setHistErr("네트워크 오류");setLoadingHist(false);});
+  };
+  // ★ v23.6: 결과 화면 새로고침 — 선생님이 정답 수정한 경우 학생이 즉시 새 점수 확인
+  // 1) view_answer_key 로 최신 정답 재조회 (서버 캐시는 update_answer_key 시 자동 무효화됨)
+  // 2) 새 aKey 로 grade() 재실행 → setRes 갱신
+  // 3) 주관식이 있어도 객관식 부분은 즉시 반영, 주관식은 채점중 표시 유지
+  const hRefreshResult=async()=>{
+    if(refreshing)return;
+    if(!currentExam){alert("새로고침할 시험 정보가 없습니다. '새 시험 보기'로 다시 시작해주세요.");return;}
+    setRefreshing(true);
+    try{
+      const params=new URLSearchParams();
+      if(currentExam.folderId){
+        params.set("folderId",currentExam.folderId);
+      }else{
+        params.set("subject",currentExam.subject||sub||"");
+        params.set("grade",currentExam.grade||gr||"");
+        params.set("level",currentExam.level||lv||"");
+        params.set("examType",currentExam.examType||"");
+        if(currentExam.teacher)params.set("teacher",currentExam.teacher);
+        if(currentExam.examDate)params.set("date",currentExam.examDate);
+      }
+      const r=await fetch(`${SHEETS_URL}?action=view_answer_key&${params.toString()}`);
+      const d=await r.json();
+      if(d.result!=="ok"){alert("정답 조회 실패: "+(d.message||"알 수 없는 오류"));setRefreshing(false);return;}
+      const freshAns=normalizeAnswerData(d.answers||{});
+      const freshTyp=d.types?normalizeAnswerData(d.types):null;
+      setAKey(freshAns);setTKey(freshTyp);
+      // 재채점 — 주관식 부분점수는 기존 결과에서 보존 (refresh 시점에 AI 재호출은 비용·시간 부담)
+      const fresh=grade(ans,freshAns,freshTyp,qc);
+      // 기존 res 의 주관식 채점결과(gradeResult) · overallComment 가 있으면 보존
+      if(res&&res.det){
+        fresh.det=fresh.det.map(d=>{
+          if(d.t!=="sub")return d;
+          const prev=res.det.find(p=>p.q===d.q&&p.t==="sub");
+          if(prev&&prev.gradeResult){
+            return{...d,gradeResult:prev.gradeResult,partial:prev.partial,r:prev.r};
+          }
+          return d;
+        });
+        if(res.overallComment)fresh.overallComment=res.overallComment;
+      }
+      setRes(fresh);
+      // 변경된 점수 알림 (이전 점수와 비교)
+      const prevScore=res?res.score:null;
+      if(prevScore!==null&&prevScore!==fresh.score){
+        alert(`✅ 정답 기준이 갱신되었습니다.\n\n${prevScore}점 → ${fresh.score}점`);
+      }else{
+        alert(`✅ 새로 채점했어요. (${fresh.score}점)`);
+      }
+    }catch(e){
+      alert("네트워크 오류: "+String(e));
+    }
+    setRefreshing(false);
   };
   const hSubmit=()=>{if(ac===0)return alert("최소 1문항 이상 답을 선택하세요.");setConf(true);};
   // ============================================================
@@ -548,7 +613,7 @@ export default function App(){
       }
     }
   };
-  const hReset=()=>{setAns(Array(qc).fill(null));setRes(null);setWo(false);setSendOk(null);setScr("info");setSec(0);setNm("");setSub("");setGr("");setLv("");setEt("");setSelTeacher("");setAKey(null);setTKey(null);setQNumMap(null);setALoad(false);setANF(false);setTq(100);setCq("");setPd(todayIso());setTodayExams(null);setGradingSub(false);setGradingProgress({done:0,total:0});setGradingMode("strict");};
+  const hReset=()=>{setAns(Array(qc).fill(null));setRes(null);setWo(false);setSendOk(null);setScr("info");setSec(0);setNm("");setSub("");setGr("");setLv("");setEt("");setSelTeacher("");setAKey(null);setTKey(null);setQNumMap(null);setALoad(false);setANF(false);setTq(100);setCq("");setPd(todayIso());setTodayExams(null);setGradingSub(false);setGradingProgress({done:0,total:0});setGradingMode("strict");setCurrentExam(null);setRefreshing(false);};
   const scTo=(i)=>{setSec(i);sRefs.current[i]?.scrollIntoView({behavior:"smooth",block:"start"});};
   const goUA=()=>{const i=ans.findIndex(a=>a===null||a==="");if(i===-1)return alert("모든 문항에 답했습니다!");setSec(Math.floor(i/SEC));setTimeout(()=>{document.getElementById(`q-${i}`)?.scrollIntoView({behavior:"smooth",block:"center"});},100);};
   const clrAll=()=>{if(window.confirm("모든 답안을 초기화할까요?"))setAns(Array(qc).fill(null));};
@@ -706,6 +771,12 @@ export default function App(){
             <div style={{fontSize:11,opacity:.65,marginBottom:0}}>📌 100점 만점{res.isMixed?` (객관식 ${res.objMaxScore}점 + 주관식 ${res.subMaxScore}점, 주관식 1.5배 가중치)`:""}</div>
             {/* ★ v22.4: "오답을 복습하세요!" 제거 — 총평으로 대체 */}
           </div>
+          {/* ★ v23.6: 정답 새로고침 버튼 — 선생님이 정답을 고친 경우 즉시 재채점 */}
+          {currentExam&&(
+            <div style={{display:"flex",gap:8,marginBottom:12}}>
+              <button onClick={hRefreshResult} disabled={refreshing||gradingSub} style={{flex:1,padding:"10px 14px",fontSize:13,fontWeight:700,borderRadius:10,border:`1.5px solid ${T.gold}`,background:refreshing?T.borderLight:T.white,color:refreshing?T.textMuted:T.goldDeep,cursor:refreshing?"default":"pointer",fontFamily:"inherit",opacity:refreshing||gradingSub?0.6:1}}>{refreshing?"🔄 새 정답 확인 중...":"🔄 정답 새로고침 (선생님이 정답을 고쳤다면)"}</button>
+            </div>
+          )}
           {gradingSub&&<div style={{padding:"12px 14px",borderRadius:10,marginBottom:14,background:`linear-gradient(90deg,${T.accentLight},${T.goldLight})`,border:`1.5px solid ${T.accent}`,display:"flex",alignItems:"center",gap:10}}>
             <div style={{width:24,height:24,border:`2.5px solid ${T.borderLight}`,borderTopColor:T.accent,borderRadius:"50%",animation:"spin .8s linear infinite"}}/>
             <div style={{flex:1}}>
