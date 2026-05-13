@@ -4,6 +4,14 @@
 // ============================================================
 // 버전 이력
 // ─────────────────────────────────────────
+// v23.14 (2026-05-13)
+//   ★ 시험 분석 차트 3가지 탭 (시안 1 + 시안 3)
+//     · 🕸️ 영역 (레이더 차트) — 카테고리별 강·약점 한눈에 (영역 3개 이상부터)
+//     · 📈 추세 (트렌드 차트) — 최근 시험 점수 변화 (학생 동기부여)
+//     · 📋 막대 (기존 막대그래프) — 카테고리별 정답률
+//   ★ student_history 자동 로드 → 추세 차트용 데이터
+//   ★ Pure SVG 렌더링 (외부 라이브러리 X)
+//
 // v23.13 (2026-05-13)
 //   ★ 결과 화면에서 보강 시험 바로 풀기 큰 버튼 추가
 //     · 기존: "홈으로 돌아가서 풀어보세요" 작은 안내
@@ -80,7 +88,7 @@
 
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 
-const VERSION = "v23.13";
+const VERSION = "v23.14";
 const SHEETS_URL = "https://script.google.com/macros/s/AKfycbzablzeV_gVdLoUG-Oh4s02vNmncvteesBn3875WDF3lO176nc4YzAKj7B6zOJVECQO/exec";
 // ★ v22.2: API 절대 URL (CORS 허용)
 const GRADE_SUBJECTIVE_URL = "https://chaeum-teacher.vercel.app/api/grade-subjective";
@@ -430,6 +438,9 @@ export default function App(){
   // ★ v23.11: 카테고리 데이터 (영역별 정답률) + 즉시 풀이 로딩 상태
   const[categories,setCategories]=useState(null);  // { "1": "문법", "2": "어휘", ... }
   const[loadingExpl,setLoadingExpl]=useState(false); // 객관식 즉시 풀이 생성 중
+  // ★ v23.14 (2026-05-13): 그래프 시각화 탭 (radar / trend / bar)
+  const[chartTab,setChartTab]=useState("radar");  // radar | trend | bar
+  const[trendHistory,setTrendHistory]=useState(null);  // [{date, score, byCategory:{문법:80,...}}]
   // ★ v23.8: 정오표 펼침 상태 (객관식 오답마다 정답·오답 분석 표시)
   const[expandedRows,setExpandedRows]=useState({});
   const[conf,setConf]=useState(false);const[sec,setSec]=useState(0);const[wo,setWo]=useState(false);
@@ -963,6 +974,24 @@ export default function App(){
     const t=setTimeout(()=>setMiniTimeLeft(p=>p-1),1000);
     return ()=>clearTimeout(t);
   },[scr,miniTimeLeft,miniCurrent,miniResult]);
+  // ★ v23.14 (2026-05-13): 결과 화면 진입 시 학생 히스토리 로드 (트렌드 차트용)
+  useEffect(()=>{
+    if(scr!=="result"||!nm||!ph)return;
+    if(trendHistory!==null)return;  // 한 번만 로드
+    (async()=>{
+      try {
+        const r = await fetch(`${SHEETS_URL}?action=student_history&name=${encodeURIComponent(nm.trim())}&phone=${encodeURIComponent(ph)}`);
+        const d = await r.json();
+        if(d.result==="ok"){
+          // 최근 5회만 (date 기준 내림차순 → 오름차순으로 reverse)
+          const records = (d.records||[]).filter(r=>r.score!==null).slice(0,5).reverse();
+          setTrendHistory(records);
+        } else {
+          setTrendHistory([]);
+        }
+      } catch(_e) { setTrendHistory([]); }
+    })();
+  },[scr,nm,ph,trendHistory]);
   // 결과 화면 진입 시 — 채점 완료되면 자동으로 recommend_mini_exam 호출
   useEffect(()=>{
     // 결과 화면이 아니거나, 주관식 채점 중이거나, currentExam 없으면 skip
@@ -1297,13 +1326,112 @@ export default function App(){
             }
             // 카테고리별 색깔 (이쁘게)
             const catColors = ["#1976D2", "#388E3C", "#7B1FA2", "#F57C00", "#C62828", "#00838F", "#5D4037"];
+            // ★ v23.14 (2026-05-13): 레이더 차트 SVG 생성 헬퍼
+            const renderRadar = () => {
+              if (!hasCat || catList.length < 3) {
+                return <div style={{padding:"20px",textAlign:"center",fontSize:12,color:T.textMuted}}>레이더 차트는 영역 3개 이상부터 표시돼요.<br/>(현재 영역: {catList.length}개)</div>;
+              }
+              const size = 240, cx = size/2, cy = size/2, maxR = 90;
+              const n = catList.length;
+              const angle = (i) => (Math.PI*2*i/n) - Math.PI/2;
+              const pt = (i, r) => [cx + Math.cos(angle(i))*r, cy + Math.sin(angle(i))*r];
+              // 100% 격자 (10단계)
+              const grids = [20, 40, 60, 80, 100].map(p => {
+                const points = catList.map((_, i) => pt(i, maxR*p/100).join(",")).join(" ");
+                return <polygon key={p} points={points} fill="none" stroke={T.borderLight} strokeWidth="0.5"/>;
+              });
+              const axes = catList.map((_, i) => {
+                const [x2,y2] = pt(i, maxR);
+                return <line key={i} x1={cx} y1={cy} x2={x2} y2={y2} stroke={T.borderLight} strokeWidth="0.5"/>;
+              });
+              const scoreShape = catList.map((c, i) => pt(i, maxR*c.pct/100).join(",")).join(" ");
+              const labels = catList.map((c, i) => {
+                const [lx, ly] = pt(i, maxR + 22);
+                return (
+                  <g key={i}>
+                    <text x={lx} y={ly} fontSize="11" fontWeight="700" fill={catColors[i % catColors.length]} textAnchor="middle" dominantBaseline="middle">
+                      {c.name}
+                    </text>
+                    <text x={lx} y={ly+12} fontSize="9" fill={T.textMuted} textAnchor="middle">{c.pct}%</text>
+                  </g>
+                );
+              });
+              return (
+                <svg width="100%" height={size+10} viewBox={`0 0 ${size} ${size+10}`} style={{maxWidth:280, margin:"0 auto", display:"block"}}>
+                  {grids}
+                  {axes}
+                  <polygon points={scoreShape} fill={T.goldLight} fillOpacity="0.6" stroke={T.goldDark} strokeWidth="2"/>
+                  {catList.map((c, i) => {
+                    const [px, py] = pt(i, maxR*c.pct/100);
+                    return <circle key={i} cx={px} cy={py} r="4" fill={catColors[i % catColors.length]}/>;
+                  })}
+                  {labels}
+                </svg>
+              );
+            };
+            // ★ v23.14: 트렌드 차트 SVG (최근 시험 점수 변화)
+            const renderTrend = () => {
+              if (!trendHistory || trendHistory.length === 0) {
+                return <div style={{padding:"20px",textAlign:"center",fontSize:12,color:T.textMuted}}>시험 기록이 없어요. (최소 2회 이상 응시 후 추세 확인)</div>;
+              }
+              const history = [...trendHistory];
+              // 현재 시험 추가
+              if (res && res.score !== undefined && res.score !== null) {
+                history.push({date: ds, score: res.score, current: true});
+              }
+              if (history.length < 2) {
+                return <div style={{padding:"20px",textAlign:"center",fontSize:12,color:T.textMuted}}>추세를 보려면 최소 2회 시험이 필요해요.<br/>(현재 {history.length}회)</div>;
+              }
+              const w = 280, h = 160, pad = 30;
+              const xStep = (w - 2*pad) / Math.max(1, history.length - 1);
+              const points = history.map((r, i) => ({
+                x: pad + xStep*i,
+                y: h - pad - (h - 2*pad) * (Number(r.score)||0) / 100,
+                score: Number(r.score) || 0,
+                date: r.date,
+                current: r.current
+              }));
+              const linePath = points.map((p, i) => (i===0?"M":"L") + p.x.toFixed(1) + "," + p.y.toFixed(1)).join(" ");
+              return (
+                <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} style={{maxWidth:300, margin:"0 auto", display:"block"}}>
+                  {/* Y축 그리드 */}
+                  {[0,25,50,75,100].map(p => {
+                    const y = h - pad - (h - 2*pad) * p / 100;
+                    return (
+                      <g key={p}>
+                        <line x1={pad} y1={y} x2={w-pad} y2={y} stroke={T.borderLight} strokeWidth="0.5"/>
+                        <text x={pad-5} y={y+3} fontSize="9" fill={T.textMuted} textAnchor="end">{p}</text>
+                      </g>
+                    );
+                  })}
+                  {/* 라인 */}
+                  <path d={linePath} fill="none" stroke={T.goldDark} strokeWidth="2.5"/>
+                  {/* 점 */}
+                  {points.map((p, i) => (
+                    <g key={i}>
+                      <circle cx={p.x} cy={p.y} r={p.current?6:4} fill={p.score>=90?T.accent:p.score>=70?T.goldDark:T.danger} stroke={p.current?T.white:"none"} strokeWidth={p.current?2:0}/>
+                      <text x={p.x} y={p.y-10} fontSize="10" fontWeight="700" fill={T.text} textAnchor="middle">{p.score}</text>
+                      <text x={p.x} y={h-10} fontSize="8" fill={T.textMuted} textAnchor="middle">{String(p.date||"").slice(5,10)}</text>
+                    </g>
+                  ))}
+                </svg>
+              );
+            };
             return (
               <div style={{...S.card, marginBottom: 12}}>
                 <h3 style={{fontSize: 14, fontWeight: 700, color: T.text, marginBottom: 10}}>
-                  📊 시험 분석{hasCat?` — 영역별 정답률`:``}
+                  📊 시험 분석
                 </h3>
-                {/* ★ v23.11: 카테고리별 막대그래프 (문법/어휘/독해 등) — 있으면 최상단 */}
-                {hasCat && catList.map((c, ci) => {
+                {/* ★ v23.14: 차트 탭 (레이더 / 트렌드 / 막대) */}
+                <div style={{display:"flex",gap:4,marginBottom:10,background:T.bg,borderRadius:8,padding:3}}>
+                  <button onClick={()=>setChartTab("radar")} style={{flex:1,padding:"6px 10px",fontSize:11,fontWeight:700,borderRadius:6,border:"none",cursor:"pointer",fontFamily:"inherit",background:chartTab==="radar"?T.goldDark:"transparent",color:chartTab==="radar"?T.white:T.textSub}}>🕸️ 영역</button>
+                  <button onClick={()=>setChartTab("trend")} style={{flex:1,padding:"6px 10px",fontSize:11,fontWeight:700,borderRadius:6,border:"none",cursor:"pointer",fontFamily:"inherit",background:chartTab==="trend"?T.goldDark:"transparent",color:chartTab==="trend"?T.white:T.textSub}}>📈 추세</button>
+                  <button onClick={()=>setChartTab("bar")} style={{flex:1,padding:"6px 10px",fontSize:11,fontWeight:700,borderRadius:6,border:"none",cursor:"pointer",fontFamily:"inherit",background:chartTab==="bar"?T.goldDark:"transparent",color:chartTab==="bar"?T.white:T.textSub}}>📋 막대</button>
+                </div>
+                {/* 선택된 차트 */}
+                {chartTab==="radar" && renderRadar()}
+                {chartTab==="trend" && renderTrend()}
+                {chartTab==="bar" && hasCat && catList.map((c, ci) => {
                   const barColor = c.pct >= 80 ? T.accent : c.pct >= 60 ? T.goldDark : T.danger;
                   const labelColor = catColors[ci % catColors.length];
                   return (
@@ -1318,7 +1446,8 @@ export default function App(){
                     </div>
                   );
                 })}
-                {hasCat && <div style={{height: 1, background: T.borderLight, margin: "8px 0"}}/>}
+                {chartTab==="bar" && !hasCat && <div style={{padding:"12px",textAlign:"center",fontSize:11,color:T.textMuted}}>영역 분석 데이터가 아직 없어요. 시험 등록 후 1~2분 안에 표시됩니다.</div>}
+                <div style={{height: 1, background: T.borderLight, margin: "8px 0"}}/>
                 {/* 객관식/주관식 막대 (카테고리 있어도 보조 정보로 표시) */}
                 {res.totalObj > 0 && (
                   <div style={{marginBottom: 8}}>
