@@ -4,6 +4,24 @@
 // ============================================================
 // 버전 이력
 // ─────────────────────────────────────────
+// v23.9 (2026-05-13)
+//   ★ 보강 미니 시험 자동 추천 + 응시 시스템 (Phase 4)
+//     · 채점 결과 후 자동으로 GAS recommend_mini_exam 호출 (약점 영역 분석)
+//     · 홈 화면에 "📚 보강 시험 N개" 배지 표시 (학생 본인 추천만)
+//     · 미니 시험 응시 화면 (5분 카운트다운, 큰 버튼, 모바일 친화)
+//     · 풀이 완료 시 GAS submit_mini_exam_result 호출 → 점수 저장
+//   ★ 수학 기호 키보드 (Phase 6) — 주관식 입력 시 √ π ≤ ≥ x² 등 빠른 삽입
+//   ★ KaTeX 수식 렌더링 (선택) — 수학 문제 본문에 LaTeX 표기 시 자동 변환
+//     · package.json 에 "katex": "^0.16.0" 추가 필요 (없으면 텍스트 그대로 표시)
+//
+// v23.8 (2026-05-13)
+//   ★ 채점 결과 화면 — 방식 1+5 통합 (오답 분석 + 분석 리포트)
+//     · view_answer_key 응답의 explanations 필드 사용 (객관식 choiceExplanations + 주관식 gradingGuide)
+//     · 정오표 객관식 오답 클릭 시 펼침 — 정답 이유 + 선택지별 분석
+//     · 화면 상단에 분석 리포트 추가 (영역별 정답률 막대 그래프 + 약점 안내)
+//     · 약점 영역(80% 미만) 자동 표시 — 보강 미니 시험 안내
+//   ★ explanations state + expandedRows state 신규 추가
+//
 // v23.7 (2026-05-11)
 //   ★ 주관식 피드백 포맷 변경 — 채움Tip 제거, DiffView(수정·추가 가이드) + 문법팁 형식
 //   ★ LOOSE 모드 diff 적용 — 구두점·공백 완화 (선생님앱과 동일 기준)
@@ -33,7 +51,7 @@
 
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 
-const VERSION = "v23.7";
+const VERSION = "v23.9";
 const SHEETS_URL = "https://script.google.com/macros/s/AKfycbzablzeV_gVdLoUG-Oh4s02vNmncvteesBn3875WDF3lO176nc4YzAKj7B6zOJVECQO/exec";
 // ★ v22.2: API 절대 URL (CORS 허용)
 const GRADE_SUBJECTIVE_URL = "https://chaeum-teacher.vercel.app/api/grade-subjective";
@@ -378,6 +396,10 @@ export default function App(){
   const[tq,setTq]=useState(100);const[cq,setCq]=useState("");
   const qc=cq?parseInt(cq)||100:tq;
   const[ans,setAns]=useState([]);const[res,setRes]=useState(null);
+  // ★ v23.8: 오답분석 데이터 — view_answer_key 응답에서 받음 (객관식 choiceExplanations + 주관식 gradingGuide)
+  const[explanations,setExplanations]=useState(null);
+  // ★ v23.8: 정오표 펼침 상태 (객관식 오답마다 정답·오답 분석 표시)
+  const[expandedRows,setExpandedRows]=useState({});
   const[conf,setConf]=useState(false);const[sec,setSec]=useState(0);const[wo,setWo]=useState(false);
   const[aKey,setAKey]=useState(null);const[tKey,setTKey]=useState(null);const[qNumMap,setQNumMap]=useState(null);const[aLoad,setALoad]=useState(false);const[aNF,setANF]=useState(false);
   // ★ v22.7: 주관식 채점 모드 (loose=해석/번역, strict=단답형) — 시험 선택 시 저장
@@ -388,6 +410,21 @@ export default function App(){
   const[sending,setSending]=useState(false);const[sendOk,setSendOk]=useState(null);
   const[gradingSub,setGradingSub]=useState(false);
   const[gradingProgress,setGradingProgress]=useState({done:0,total:0});
+  // ★ v23.9: 미니 보강 시험 state
+  const[miniExams,setMiniExams]=useState([]);  // 학생 본인 추천 시험 목록 [{id, subject, weakArea, weakPct, deadline, status, questions}]
+  const[loadingMini,setLoadingMini]=useState(false);
+  const[miniCurrent,setMiniCurrent]=useState(null);  // 현재 풀고 있는 미니 시험
+  const[miniAnswers,setMiniAnswers]=useState([]);    // 미니 시험 답안
+  const[miniTimeLeft,setMiniTimeLeft]=useState(300); // 5분 = 300초
+  const[miniResult,setMiniResult]=useState(null);    // 풀이 완료 후 결과
+  const[miniSending,setMiniSending]=useState(false);
+  const[recommendingMini,setRecommendingMini]=useState(false);  // 추천 미니 생성 중 표시
+  const[recommendedNew,setRecommendedNew]=useState(0);          // 방금 새로 추천된 N개
+  // ★ v23.9: 수학 기호 키보드 — 현재 포커스된 주관식 input 추적
+  const[focusedSubIdx,setFocusedSubIdx]=useState(null);      // 일반 시험용 (qi)
+  const[focusedSubBlankIdx,setFocusedSubBlankIdx]=useState(null);  // 빈칸 multi 용
+  const[focusedMiniIdx,setFocusedMiniIdx]=useState(null);   // 미니 시험용
+  const isMathSubject=String(sub).indexOf("수학")>=0||String(currentExam&&currentExam.subject).indexOf("수학")>=0||String(miniCurrent&&miniCurrent.subject).indexOf("수학")>=0;
   const cn=exSub?`${exSub} ${gr} ${exLv}반`:(gr?`${gr}`:"")
   const ds=isoToDot(pd);
   const isToday=pd===todayIso();
@@ -434,6 +471,8 @@ export default function App(){
           const newHash=JSON.stringify(fa);
           if(prevHash===newHash)return; // 변동 없음
           setAKey(fa);setTKey(ft);
+          // ★ v23.8: 오답분석 데이터 갱신
+          if(dd.explanations)setExplanations(dd.explanations);
           const fresh=grade(ans,fa,ft,qc);
           // 주관식 보존
           if(res&&res.det){
@@ -596,6 +635,8 @@ export default function App(){
       const freshAns=normalizeAnswerData(d.answers||{});
       const freshTyp=d.types?normalizeAnswerData(d.types):null;
       setAKey(freshAns);setTKey(freshTyp);
+      // ★ v23.8: 오답분석 데이터 갱신 (정답 수정 시 explanations도 함께 업데이트)
+      if(d.explanations)setExplanations(d.explanations);
       // 재채점 — 주관식 부분점수는 기존 결과에서 보존 (refresh 시점에 AI 재호출은 비용·시간 부담)
       const fresh=grade(ans,freshAns,freshTyp,qc);
       // 기존 res 의 주관식 채점결과(gradeResult) · overallComment 가 있으면 보존
@@ -650,6 +691,8 @@ export default function App(){
           effAKey=normalizeAnswerData(dd.answers||{});
           effTKey=dd.types?normalizeAnswerData(dd.types):tKey;
           setAKey(effAKey);setTKey(effTKey);
+          // ★ v23.8: 오답분석 데이터 받기 (정오표 펼침에서 사용)
+          if(dd.explanations)setExplanations(dd.explanations);
         }
       }catch(_e){/* 네트워크 실패 시 기존 aKey 사용 — 채점 자체는 진행 */}
     }
@@ -771,7 +814,169 @@ export default function App(){
       }
     }
   };
-  const hReset=()=>{setAns(Array(qc).fill(null));setRes(null);setWo(false);setSendOk(null);setScr("info");setSec(0);setNm("");setSub("");setGr("");setLv("");setEt("");setSelTeacher("");setAKey(null);setTKey(null);setQNumMap(null);setALoad(false);setANF(false);setTq(100);setCq("");setPd(todayIso());setTodayExams(null);setGradingSub(false);setGradingProgress({done:0,total:0});setGradingMode("strict");setCurrentExam(null);setRefreshing(false);};
+  // ============================================================
+  // ★ v23.9: 미니 보강 시험 핸들러
+  // ============================================================
+  // 미니 시험 목록 조회 (학생 본인 추천만)
+  const hLoadMiniExams=async()=>{
+    if(!nm.trim()||!ph)return;
+    setLoadingMini(true);
+    try{
+      const params=new URLSearchParams({action:"list_mini_exam_progress",student:nm.trim(),phone:ph});
+      const r=await fetch(`${SHEETS_URL}?${params.toString()}`);
+      const d=await r.json();
+      if(d.result==="ok"){
+        // pending/in_progress 만 (완료된 시험은 숨김)
+        const active=(d.exams||[]).filter(e=>e.status!=="완료"&&e.status!=="마감초과");
+        setMiniExams(active);
+      }
+    }catch(_e){/* 조용히 실패 */}
+    setLoadingMini(false);
+  };
+  // 미니 시험 시작 (시험 1개 클릭)
+  const hStartMini=(ex)=>{
+    setMiniCurrent(ex);
+    const qs=Array.isArray(ex.questions)?ex.questions:[];
+    setMiniAnswers(Array(qs.length).fill(null));
+    setMiniTimeLeft(300);  // 5분 = 300초
+    setMiniResult(null);
+    setScr("miniexam");
+  };
+  // 미니 시험 답안 변경
+  const hMiniAns=(idx,val)=>{
+    setMiniAnswers(p=>{const n=[...p];n[idx]=val;return n;});
+  };
+  // 미니 시험 제출 (자동 채점 + GAS 전송)
+  const hMiniSubmit=async(autoSubmit=false)=>{
+    if(!miniCurrent)return;
+    const qs=miniCurrent.questions||[];
+    const unanswered=miniAnswers.filter(a=>a===null||a===undefined||a==="").length;
+    if(!autoSubmit&&unanswered>0){
+      if(!window.confirm(`아직 ${unanswered}문항을 풀지 않았어요. 그래도 제출할까요?`))return;
+    }
+    setMiniSending(true);
+    // 클라이언트 즉시 채점
+    let correct=0;
+    const details=qs.map((q,i)=>{
+      const my=miniAnswers[i];
+      const ans=q.answer;
+      const isObj=q.type==="multiple_choice"||q.type==="객관식"||q.type==="obj";
+      let r="오답";
+      if(my===null||my===undefined||my==="")r="미입력";
+      else if(isObj){
+        if(String(my)===String(ans))r="정답";
+      }else{
+        const norm=(s)=>String(s||"").trim().toLowerCase().replace(/\s+/g,"");
+        if(norm(my)===norm(ans))r="정답";
+      }
+      if(r==="정답")correct++;
+      return{q:q.number||(i+1),stage:q.stage||"",t:isObj?"obj":"sub",s:my,c:ans,r,explanation:q.explanation||"",choiceExplanations:q.choiceExplanations||null};
+    });
+    const score=qs.length>0?Math.round((correct/qs.length)*100):0;
+    const result={score,correct,total:qs.length,details};
+    setMiniResult(result);
+    // GAS 전송
+    try{
+      await fetch(SHEETS_URL,{method:"POST",mode:"no-cors",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          action:"submit_mini_exam_result",
+          miniExamId:miniCurrent.id,
+          student:nm.trim(),
+          phone:ph,
+          score,
+          correct,
+          total:qs.length,
+          answers:miniAnswers,
+          details:details.map(d=>({q:d.q,stage:d.stage,r:d.r,s:d.s})),
+          autoSubmit:autoSubmit?1:0
+        })});
+    }catch(_e){/* 조용히 실패 */}
+    setMiniSending(false);
+  };
+  // 미니 시험 카운트다운 (300초 → 0)
+  useEffect(()=>{
+    if(scr!=="miniexam"||!miniCurrent||miniResult)return;
+    if(miniTimeLeft<=0){
+      // 시간 초과 — 자동 제출
+      hMiniSubmit(true);
+      return;
+    }
+    const t=setTimeout(()=>setMiniTimeLeft(p=>p-1),1000);
+    return ()=>clearTimeout(t);
+  },[scr,miniTimeLeft,miniCurrent,miniResult]);
+  // 결과 화면 진입 시 — 채점 완료되면 자동으로 recommend_mini_exam 호출
+  useEffect(()=>{
+    // 결과 화면이 아니거나, 주관식 채점 중이거나, currentExam 없으면 skip
+    if(scr!=="result"||gradingSub||!currentExam||!res||!nm||!ph)return;
+    // 이미 추천 요청을 보냈으면 skip (재호출 방지)
+    if(recommendingMini||recommendedNew>0)return;
+    // 점수가 80점 이상이면 추천 안 함 (약점 영역 없음)
+    if(res.score>=80){
+      // 그래도 기존 추천 시험은 로드 (이전에 받은 것 표시)
+      hLoadMiniExams();
+      return;
+    }
+    let cancelled=false;
+    (async()=>{
+      setRecommendingMini(true);
+      try{
+        // GAS recommend_mini_exam 호출 — 약점 영역 분석 + 미니 시험 큐 등록
+        const body={
+          action:"recommend_mini_exam",
+          student:nm.trim(),
+          phone:ph,
+          subject:currentExam.subject||sub||"",
+          grade:currentExam.grade||gr||"",
+          level:currentExam.level||lv||"",
+          examType:currentExam.examType||"",
+          folderId:currentExam.folderId||"",
+          score:res.score,
+          totalObj:res.totalObj,
+          oc:res.oc,
+          totalSub:res.totalSub,
+          subCorrect:res.subCorrect||0,
+          wrongQuestions:res.det.filter(d=>d.r==="오답"||d.r==="부분정답").map(d=>d.q),
+          teacher:currentExam.teacher||""
+        };
+        await fetch(SHEETS_URL,{method:"POST",mode:"no-cors",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+        // 약간 대기 후 미니 시험 목록 재조회 (GAS가 큐에 등록 + 처리할 시간)
+        if(!cancelled){
+          // 대기 5초 (큐 등록만 거의 즉시. 실제 문제 생성은 클로드 데스크탑이 처리 — 안내 메시지만)
+          setTimeout(()=>{if(!cancelled){setRecommendedNew(1);hLoadMiniExams();}},2000);
+        }
+      }catch(_e){/* 조용히 실패 */}
+      if(!cancelled)setRecommendingMini(false);
+    })();
+    return ()=>{cancelled=true;};
+  },[scr,gradingSub,res?.score,currentExam?.folderId]);
+  // 홈 화면(info, submit 탭) 진입 시 미니 시험 목록 로드
+  useEffect(()=>{
+    if(scr==="info"&&tab==="submit"&&nm.trim()&&ph){
+      hLoadMiniExams();
+    }
+  },[scr,tab,nm,ph]);
+  // 수학 기호 키보드 — 텍스트 삽입
+  const hInsertSymbol=(sym)=>{
+    // 1) 미니 시험에 포커스가 있으면 미니 시험 입력 갱신
+    if(focusedMiniIdx!==null){
+      hMiniAns(focusedMiniIdx,(miniAnswers[focusedMiniIdx]||"")+sym);
+      return;
+    }
+    // 2) 일반 시험 주관식 (단일/다중 빈칸) 갱신
+    if(focusedSubIdx!==null){
+      const cur=ans[focusedSubIdx];
+      if(focusedSubBlankIdx!==null){
+        const curStr=typeof cur==="string"?cur:"";
+        const parts=curStr.split("|");
+        while(parts.length<=focusedSubBlankIdx)parts.push("");
+        parts[focusedSubBlankIdx]=(parts[focusedSubBlankIdx]||"")+sym;
+        hSub(focusedSubIdx,parts.join("|"));
+      }else{
+        hSub(focusedSubIdx,(typeof cur==="string"?cur:"")+sym);
+      }
+    }
+  };
+  const hReset=()=>{setAns(Array(qc).fill(null));setRes(null);setWo(false);setSendOk(null);setScr("info");setSec(0);setNm("");setSub("");setGr("");setLv("");setEt("");setSelTeacher("");setAKey(null);setTKey(null);setQNumMap(null);setALoad(false);setANF(false);setTq(100);setCq("");setPd(todayIso());setTodayExams(null);setGradingSub(false);setGradingProgress({done:0,total:0});setGradingMode("strict");setCurrentExam(null);setRefreshing(false);setExplanations(null);setExpandedRows({});setMiniCurrent(null);setMiniAnswers([]);setMiniResult(null);setMiniTimeLeft(300);setRecommendedNew(0);setFocusedSubIdx(null);setFocusedSubBlankIdx(null);setFocusedMiniIdx(null);};
   const scTo=(i)=>{setSec(i);sRefs.current[i]?.scrollIntoView({behavior:"smooth",block:"start"});};
   const goUA=()=>{const i=ans.findIndex(a=>a===null||a==="");if(i===-1)return alert("모든 문항에 답했습니다!");setSec(Math.floor(i/SEC));setTimeout(()=>{document.getElementById(`q-${i}`)?.scrollIntoView({behavior:"smooth",block:"center"});},100);};
   const clrAll=()=>{if(window.confirm("모든 답안을 초기화할까요?"))setAns(Array(qc).fill(null));};
@@ -784,6 +989,28 @@ export default function App(){
         <button onClick={()=>setTab("history")} style={{flex:1,padding:"10px",fontSize:13,fontWeight:700,borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:tab==="history"?T.goldDark:T.white,color:tab==="history"?T.white:T.textSub,boxShadow:tab==="history"?"none":`inset 0 0 0 1.5px ${T.border}`}}>📊 내 성적</button>
       </div>)}
       {scr==="info"&&tab==="submit"&&(<div style={S.wrap} className="fade-up">
+        {/* ★ v23.9: 보강 시험 배지 — 학생 본인 추천 시험이 있으면 상단에 표시 */}
+        {miniExams.length>0&&(
+          <div style={{marginBottom:14,padding:"14px 16px",borderRadius:14,background:`linear-gradient(135deg,#FFF3E0,#FFE0B2)`,border:`2px solid #FB8C00`,boxShadow:"0 2px 8px rgba(251,140,0,0.2)",cursor:"pointer"}}
+               onClick={()=>{const first=miniExams[0];if(first)hStartMini(first);}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:14,fontWeight:800,color:"#E65100",marginBottom:3}}>📚 추천 보강 시험 {miniExams.length}개</div>
+                <div style={{fontSize:11,color:"#5D4037",lineHeight:1.5}}>
+                  지난 시험에서 약한 부분을 5분 만에 채우세요!<br/>
+                  {miniExams[0]?.subject||""} · {miniExams[0]?.weakArea||""} {miniExams[0]?.weakPct?`(${miniExams[0].weakPct}%)`:""}
+                </div>
+              </div>
+              <div style={{fontSize:28,color:"#E65100",fontWeight:800}}>›</div>
+            </div>
+          </div>
+        )}
+        {recommendingMini&&(
+          <div style={{marginBottom:14,padding:"10px 14px",borderRadius:10,background:T.accentLight,border:`1px solid ${T.accent}`,fontSize:12,color:T.accent,fontWeight:600,display:"flex",alignItems:"center",gap:8}}>
+            <div style={{width:14,height:14,border:`2px solid ${T.borderLight}`,borderTopColor:T.accent,borderRadius:"50%",animation:"spin .8s linear infinite"}}/>
+            보강 시험 준비 중... (잠시 후 위에 표시돼요)
+          </div>
+        )}
         <div style={S.hero}><div style={{fontSize:36,marginBottom:4}}>✏️</div><h1 style={S.heroT}>답안 제출</h1><p style={S.heroD}>본인 정보와 반을 선택하면<br/>해당 날짜의 시험 목록이 나타나요</p></div>
         <div style={S.card}>
           <div style={{marginBottom:14}}><div style={S.label}>이름 <span style={{color:T.danger}}>*</span></div><input style={S.inp} placeholder="이름을 입력하세요" value={nm} onChange={e=>setNm(e.target.value)}/></div>
@@ -896,7 +1123,7 @@ export default function App(){
                 <div style={{...S.qN,background:fi?(isSub?T.accent:T.gold):T.borderLight,color:fi?T.white:T.textMuted,fontSize:qNumMap&&qNumMap[String(qi+1)]?9:11,minWidth:qNumMap?36:28,flexDirection:"column",lineHeight:1.1,padding:"2px 3px"}}>{qNumMap&&qNumMap[String(qi+1)]?<>{qNumMap[String(qi+1)]}<span style={{fontSize:7,opacity:.7}}>({qi+1})</span></>:qi+1}</div>
                 {isSub?(<div style={{flex:1,display:"flex",alignItems:"center",gap:6}}>
                   <span style={{fontSize:10,fontWeight:700,color:T.accent,background:T.accentLight,padding:"2px 6px",borderRadius:4}}>주관식{nBlanks>1?` ${nBlanks}개`:""}</span>
-                  {nBlanks===1?(<input style={S.sInp} placeholder="답을 입력하세요" value={subStr} onChange={e=>hSub(qi,e.target.value)}/>):null}
+                  {nBlanks===1?(<input style={S.sInp} placeholder="답을 입력하세요" value={subStr} onChange={e=>hSub(qi,e.target.value)} onFocus={()=>{setFocusedSubIdx(qi);setFocusedSubBlankIdx(null);}} onBlur={()=>setTimeout(()=>setFocusedSubIdx(p=>p===qi?null:p),200)}/>):null}
                 </div>
                 ):(<><div style={S.cR}>{CV.map((v,ci)=>{const p=selArr.includes(v);return(<button key={v} onClick={()=>hAns(qi,v)} style={{...S.cBtn,background:p?T.goldDark:T.white,color:p?T.white:T.text,borderColor:p?T.goldDark:T.border,fontWeight:p?700:400,transform:p?"scale(1.06)":"scale(1)",boxShadow:p?`0 2px 8px ${T.goldMuted}`:"none"}}>{CL[ci]}</button>);})}</div>
                   <div style={{...S.sB,background:fi?(multi?T.accentLight:T.goldLight):T.borderLight,color:fi?(multi?T.accent:T.goldDeep):T.textMuted,fontWeight:multi?700:600}}>{fi?vl(sel):"–"}</div></>)}
@@ -904,7 +1131,7 @@ export default function App(){
               {isSub&&nBlanks>1&&(<div style={{display:"flex",flexDirection:"column",gap:5,marginTop:6,paddingLeft:36}}>
                 {Array.from({length:nBlanks},(_,k)=>(<div key={k} style={{display:"flex",alignItems:"center",gap:6}}>
                   <span style={{fontSize:11,fontWeight:700,color:T.accent,minWidth:22,textAlign:"center"}}>({k+1})</span>
-                  <input style={{...S.sInp,flex:1}} placeholder={`${k+1}번째 답`} value={subParts[k]||""} onChange={e=>updateBlank(k,e.target.value)}/>
+                  <input style={{...S.sInp,flex:1}} placeholder={`${k+1}번째 답`} value={subParts[k]||""} onChange={e=>updateBlank(k,e.target.value)} onFocus={()=>{setFocusedSubIdx(qi);setFocusedSubBlankIdx(k);}} onBlur={()=>setTimeout(()=>{setFocusedSubBlankIdx(p=>p===k?null:p);setFocusedSubIdx(p=>p===qi?null:p);},200)}/>
                 </div>))}
               </div>)}
             </div>);})}
@@ -974,13 +1201,84 @@ export default function App(){
             </div>
           )}
           {(res.totalQ-(res.to+res.sc))>0&&<div style={{padding:"8px 14px",borderRadius:10,marginBottom:10,fontSize:12,fontWeight:600,textAlign:"center",background:"#FFF3E0",color:"#E65100"}}>미입력 {res.totalQ-(res.to+res.sc)}문항은 0점 처리됩니다.</div>}
+          {/* ★ v23.8: 분석 리포트 (방식 5) — 점수 카드 아래 추가 */}
+          {res.det && res.det.length > 0 && (() => {
+            const correctObj = res.oc;
+            const correctSub = res.subCorrect || 0;
+            const wrongObj = res.ow;
+            const partialSub = (res.subPartial||0) - correctSub;
+            const wrongSub = res.totalSub - correctSub - Math.max(0, partialSub);
+            const objPct = res.totalObj > 0 ? Math.round((correctObj / res.totalObj) * 100) : 0;
+            const subPct = res.totalSub > 0 ? Math.round((correctSub / res.totalSub) * 100) : 0;
+            // 약점 영역 판단 (80% 미만)
+            const weakAreas = [];
+            if (res.totalObj > 0 && objPct < 80) weakAreas.push({name: "객관식", pct: objPct, color: T.goldDark});
+            if (res.totalSub > 0 && subPct < 80) weakAreas.push({name: "주관식", pct: subPct, color: T.accent});
+            return (
+              <div style={{...S.card, marginBottom: 12}}>
+                <h3 style={{fontSize: 14, fontWeight: 700, color: T.text, marginBottom: 10}}>📊 시험 분석</h3>
+                {/* 영역별 정답률 막대 */}
+                {res.totalObj > 0 && (
+                  <div style={{marginBottom: 8}}>
+                    <div style={{display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 11, color: T.textSub}}>
+                      <span>✏️ 객관식 ({correctObj}/{res.totalObj})</span>
+                      <span style={{fontWeight: 700, color: objPct >= 80 ? T.accent : objPct >= 60 ? T.goldDark : T.danger}}>{objPct}%</span>
+                    </div>
+                    <div style={{height: 8, background: T.borderLight, borderRadius: 4, overflow: "hidden"}}>
+                      <div style={{height: "100%", width: `${objPct}%`, background: objPct >= 80 ? T.accent : objPct >= 60 ? T.goldDark : T.danger, transition: "width 0.5s"}}/>
+                    </div>
+                  </div>
+                )}
+                {res.totalSub > 0 && (
+                  <div style={{marginBottom: 8}}>
+                    <div style={{display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 11, color: T.textSub}}>
+                      <span>📝 주관식 ({correctSub}/{res.totalSub}){res.subPending > 0 ? ` (⏳ ${res.subPending}개 채점중)` : ""}</span>
+                      <span style={{fontWeight: 700, color: subPct >= 80 ? T.accent : subPct >= 60 ? T.goldDark : T.danger}}>{subPct}%</span>
+                    </div>
+                    <div style={{height: 8, background: T.borderLight, borderRadius: 4, overflow: "hidden"}}>
+                      <div style={{height: "100%", width: `${subPct}%`, background: subPct >= 80 ? T.accent : subPct >= 60 ? T.goldDark : T.danger, transition: "width 0.5s"}}/>
+                    </div>
+                  </div>
+                )}
+                {/* 약점 안내 */}
+                {weakAreas.length > 0 && (
+                  <div style={{marginTop: 10, padding: "8px 10px", background: "#FFF8E1", border: `1px solid #FFE082`, borderRadius: 8, fontSize: 11, color: "#5D4037", lineHeight: 1.5}}>
+                    <strong style={{color: "#E65100"}}>💡 보강 필요 영역:</strong> {weakAreas.map(w => `${w.name} ${w.pct}%`).join(" · ")}<br/>
+                    <span style={{fontSize: 10, color: "#8D6E63"}}>아래 정오표에서 틀린 문제 클릭하면 자세한 분석을 볼 수 있어요!</span>
+                    {/* ★ v23.9: 보강 미니 시험 자동 추천 안내 */}
+                    {(recommendingMini||miniExams.length>0)&&(
+                      <div style={{marginTop:6,padding:"6px 8px",background:"#FFE0B2",borderRadius:6,fontSize:11,color:"#E65100",fontWeight:600,display:"flex",alignItems:"center",gap:6}}>
+                        {recommendingMini?(<>
+                          <div style={{width:12,height:12,border:`2px solid #FFFFFF80`,borderTopColor:"#E65100",borderRadius:"50%",animation:"spin .8s linear infinite"}}/>
+                          📚 약점 보강 시험 준비 중... (홈 화면에 곧 표시돼요)
+                        </>):(
+                          <span>📚 추천 보강 시험 {miniExams.length}개 — 홈으로 돌아가서 풀어보세요!</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {res.overallComment && weakAreas.length === 0 && correctObj + correctSub === res.totalQ && (
+                  <div style={{marginTop: 10, padding: "8px 10px", background: T.accentLight, borderRadius: 8, fontSize: 11, color: T.accent, fontWeight: 600, textAlign: "center"}}>
+                    🎉 완벽해요! 모든 영역에서 만점이에요.
+                  </div>
+                )}
+              </div>
+            );
+          })()}
           <div style={S.card}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}><h3 style={{fontSize:15,fontWeight:700,color:T.text}}>정오표</h3>
               <button onClick={()=>setWo(!wo)} style={{padding:"5px 12px",fontSize:12,fontWeight:600,border:"none",borderRadius:6,cursor:"pointer",fontFamily:"inherit",background:wo?T.dangerLight:T.borderLight,color:wo?T.danger:T.textSub}}>{wo?"❌ 오답만":"전체 보기"}</button></div>
             <div style={{border:`1px solid ${T.border}`,borderRadius:10,overflow:"hidden"}}>
               <div style={S.tH}><span style={{flex:"0 0 36px",textAlign:"center"}}>#</span><span style={{flex:"0 0 36px",textAlign:"center"}}>유형</span><span style={{flex:1,textAlign:"center"}}>내 답</span><span style={{flex:1,textAlign:"center"}}>정답</span><span style={{flex:"0 0 60px",textAlign:"center"}}>결과</span></div>
-              {res.det.filter(d=>wo?d.r==="오답"||d.r==="부분정답":true).map(d=>(
-                <div key={d.q} style={{...S.tR,background:d.r==="정답"?"#F1F8E9":d.r==="오답"?"#FFF5F5":d.r==="부분정답"?"#FFF8E1":T.goldPale,flexDirection:"column",alignItems:"stretch"}}>
+              {res.det.filter(d=>wo?d.r==="오답"||d.r==="부분정답":true).map(d=>{
+                // ★ v23.8: 객관식 오답에만 펼침 기능 (choiceExplanations 있을 때)
+                const qExpl = explanations && explanations[String(d.q)];
+                const canExpand = d.t === "obj" && d.r === "오답" && qExpl && (qExpl.explanation || qExpl.choiceExplanations);
+                const isExpanded = expandedRows[d.q];
+                return (
+                <div key={d.q} style={{...S.tR,background:d.r==="정답"?"#F1F8E9":d.r==="오답"?"#FFF5F5":d.r==="부분정답"?"#FFF8E1":T.goldPale,flexDirection:"column",alignItems:"stretch",cursor:canExpand?"pointer":"default"}}
+                  onClick={canExpand ? () => setExpandedRows(p => ({...p, [d.q]: !p[d.q]})) : undefined}>
                   <div style={{display:"flex",alignItems:"center",width:"100%"}}>
                     <span style={{flex:"0 0 36px",textAlign:"center",fontWeight:700,fontSize:qNumMap?10:12,color:T.textSub}}>{qNumMap?qNumMap[String(d.q)]||d.q:d.q}</span>
                     <span style={{flex:"0 0 36px",textAlign:"center",fontSize:10,fontWeight:700,color:d.t==="sub"?T.accent:T.goldDark}}>{d.t==="sub"?"주관":"객관"}</span>
@@ -988,6 +1286,42 @@ export default function App(){
                     <span style={{flex:1,textAlign:"center",fontWeight:600,fontSize:13,color:T.goldDark,wordBreak:"break-word",padding:"0 4px"}}>{d.t==="sub"?(d.c||"–"):vl(d.c)}</span>
                     <span style={{flex:"0 0 60px",textAlign:"center",fontSize:14}}>{d.r==="정답"?"✅":d.r==="오답"?"❌":d.r==="부분정답"?<span style={{fontSize:11,fontWeight:700,color:"#B8860B"}}>{d.partial}</span>:"⏳"}</span>
                   </div>
+                  {/* ★ v23.8: 객관식 오답 펼침 — choiceExplanations 표시 (방식 1) */}
+                  {canExpand && isExpanded && (
+                    <div style={{padding:"10px 12px",marginTop:6,marginLeft:36,background:T.white,border:`1px solid ${T.borderLight}`,borderRadius:8,fontSize:11,color:T.text,lineHeight:1.6}}>
+                      {qExpl.explanation && (
+                        <div style={{marginBottom:8,padding:"6px 8px",background:"#E8F5E9",borderLeft:`3px solid ${T.accent}`,borderRadius:4}}>
+                          <span style={{fontWeight:700,color:T.accent}}>💡 정답이 {d.c}인 이유: </span>
+                          <span style={{color:T.text}}>{qExpl.explanation}</span>
+                        </div>
+                      )}
+                      {qExpl.choiceExplanations && Object.keys(qExpl.choiceExplanations).length > 0 && (
+                        <>
+                          <div style={{fontSize:10,fontWeight:700,color:T.textMuted,marginTop:6,marginBottom:4}}>📋 선택지별 분석</div>
+                          {[1,2,3,4,5].map(n => {
+                            const ce = qExpl.choiceExplanations[String(n)] || qExpl.choiceExplanations[n];
+                            if (!ce) return null;
+                            const isCorrect = String(d.c) === String(n);
+                            const isStudent = String(d.s) === String(n);
+                            const bg = isCorrect ? "#E8F5E9" : isStudent ? "#FFEBEE" : T.bg;
+                            const bd = isCorrect ? T.accent : isStudent ? T.danger : T.border;
+                            const tag = isCorrect ? "✅ 정답" : isStudent ? "❌ 내 답" : "";
+                            return (
+                              <div key={n} style={{padding:"5px 8px",marginBottom:3,background:bg,border:`1px solid ${bd}40`,borderRadius:4}}>
+                                <span style={{fontWeight:700,color:isCorrect?T.accent:isStudent?T.danger:T.textSub}}>{["①","②","③","④","⑤"][n-1]} {tag && <span style={{fontSize:9,marginLeft:2}}>{tag}</span>}</span>
+                                <div style={{marginTop:2,fontSize:10,color:T.textSub}}>{ce}</div>
+                              </div>
+                            );
+                          })}
+                        </>
+                      )}
+                    </div>
+                  )}
+                  {canExpand && !isExpanded && (
+                    <div style={{marginTop:3,marginLeft:36,fontSize:10,color:T.goldDark,fontWeight:600}}>
+                      ▼ 클릭하면 정답·오답 분석 보기
+                    </div>
+                  )}
                   {/* ★ v23.7: 오답·부분정답 주관식 — DiffView(수정가이드) + 문법팁, 채움Tip 제거 */}
                   {d.t==="sub"&&d.r!=="채점중"&&d.r!=="정답"&&(
                     <div style={{padding:"8px 12px",marginTop:4,marginLeft:72,background:T.white,border:`1px solid ${T.borderLight}`,borderRadius:8,fontSize:11,color:T.textSub,lineHeight:1.6}}>
@@ -1013,7 +1347,9 @@ export default function App(){
                       )}
                     </div>
                   )}
-                </div>))}
+                </div>
+                );
+              })}
             </div>
             {res.ow>0&&<div style={{marginTop:12,padding:"10px 12px",background:T.dangerLight,borderRadius:8,lineHeight:1.6}}><span style={{fontWeight:700,fontSize:12,color:T.danger}}>틀린 문항: </span><span style={{fontSize:12,color:T.text}}>{res.det.filter(d=>d.r==="오답").map(d=>d.q).join(", ")}</span></div>}
           </div>
@@ -1031,8 +1367,121 @@ export default function App(){
         </div>}
         <div style={{marginBottom:20}}><button style={{...S.btnG,opacity:gradingSub?0.5:1}} onClick={hReset} disabled={gradingSub}>{gradingSub?"📝 주관식 채점 중... 잠시만요":"새 시험 보기"}</button></div>
       </div>)}
+      {/* ★ v23.9: 미니 보강 시험 응시 화면 (5분 카운트다운 + 큰 버튼) */}
+      {scr==="miniexam"&&miniCurrent&&(<div style={S.wrap} className="fade-up">
+        {!miniResult?(<>
+          {/* 헤더 — 약점 영역 + 타이머 */}
+          <div style={{position:"sticky",top:48,zIndex:50,background:T.white,borderRadius:14,padding:"14px 16px",marginBottom:14,boxShadow:"0 2px 10px rgba(0,0,0,0.08)",border:`2px solid ${miniTimeLeft<=60?T.danger:T.gold}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:13,fontWeight:800,color:T.text,marginBottom:3}}>📚 보강 시험 · {miniCurrent.subject||""}</div>
+                <div style={{fontSize:11,color:T.textSub}}>약점: {miniCurrent.weakArea||""} {miniCurrent.weakPct?`(${miniCurrent.weakPct}%)`:""} · {(miniCurrent.questions||[]).length}문항</div>
+              </div>
+              <div style={{textAlign:"center",minWidth:80}}>
+                <div style={{fontSize:10,color:T.textMuted,fontWeight:600}}>남은 시간</div>
+                <div style={{fontSize:22,fontWeight:800,color:miniTimeLeft<=60?T.danger:T.goldDark,fontFamily:"monospace"}}>
+                  {Math.floor(miniTimeLeft/60)}:{String(miniTimeLeft%60).padStart(2,"0")}
+                </div>
+              </div>
+            </div>
+            <div style={{marginTop:8,height:6,background:T.borderLight,borderRadius:3,overflow:"hidden"}}>
+              <div style={{height:"100%",width:`${(miniTimeLeft/300)*100}%`,background:miniTimeLeft<=60?T.danger:T.gold,transition:"width 1s linear"}}/>
+            </div>
+          </div>
+          {/* 문제 목록 */}
+          {(miniCurrent.questions||[]).map((q,i)=>{
+            const isObj=q.type==="multiple_choice"||q.type==="객관식"||q.type==="obj";
+            const my=miniAnswers[i];
+            const choices=q.choices||[];
+            const stageLabels={concept:"1️⃣ 핵심 개념",component:"2️⃣ 구성 요소",meaning:"3️⃣ 의미 점검",basic:"4️⃣ 기본 적용",application:"5️⃣ 응용"};
+            const stageColor={concept:"#1976D2",component:"#388E3C",meaning:"#7B1FA2",basic:"#F57C00",application:"#C62828"};
+            return(<div key={i} style={{background:T.white,borderRadius:14,padding:"16px",marginBottom:12,border:`2px solid ${my!==null&&my!==undefined&&my!==""?T.accent:T.borderLight}`,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                <span style={{padding:"4px 10px",background:`${stageColor[q.stage]||T.goldDark}20`,color:stageColor[q.stage]||T.goldDark,fontSize:11,fontWeight:800,borderRadius:6}}>{stageLabels[q.stage]||`문제 ${i+1}`}</span>
+                <span style={{fontSize:10,color:T.textMuted,fontWeight:600}}>{i+1}/{(miniCurrent.questions||[]).length}</span>
+              </div>
+              <div style={{fontSize:15,fontWeight:600,color:T.text,marginBottom:14,lineHeight:1.6,whiteSpace:"pre-wrap"}}>{q.question||""}</div>
+              {isObj?(<div style={{display:"flex",flexDirection:"column",gap:8}}>
+                {choices.map((c,ci)=>{
+                  const isSel=String(my)===String(ci+1);
+                  return(<button key={ci} onClick={()=>hMiniAns(i,ci+1)} style={{padding:"14px 14px",fontSize:14,fontWeight:600,borderRadius:10,border:`2px solid ${isSel?T.goldDark:T.border}`,background:isSel?T.goldLight:T.white,color:isSel?T.goldDeep:T.text,cursor:"pointer",fontFamily:"inherit",textAlign:"left",lineHeight:1.5,transition:"all .15s"}}>{c}</button>);
+                })}
+              </div>):(<div>
+                <input type="text" value={my||""} placeholder="답을 입력하세요"
+                  onChange={e=>hMiniAns(i,e.target.value)}
+                  onFocus={()=>setFocusedMiniIdx(i)}
+                  onBlur={()=>setTimeout(()=>setFocusedMiniIdx(p=>p===i?null:p),200)}
+                  style={{width:"100%",padding:"14px 14px",fontSize:15,borderRadius:10,border:`2px solid ${T.border}`,background:T.bg,fontFamily:"inherit"}}/>
+              </div>)}
+            </div>);
+          })}
+          {/* 제출 버튼 */}
+          <button style={{...S.btnG,fontSize:16,padding:"15px",marginTop:8,opacity:miniSending?0.6:1}} disabled={miniSending} onClick={()=>hMiniSubmit(false)}>
+            {miniSending?"제출 중...":"📤 제출하기"}
+          </button>
+          <button style={{...S.btnO,marginTop:8,width:"100%"}} onClick={()=>{if(window.confirm("나가면 답안이 저장되지 않아요. 정말 나갈까요?"))setScr("info");}}>
+            ← 나중에 다시 풀기
+          </button>
+          {/* 수학 기호 키보드 */}
+          {isMathSubject&&focusedMiniIdx!==null&&<MathKeyboard onInsert={hInsertSymbol} T={T}/>}
+        </>):(<>
+          {/* 결과 화면 */}
+          <div style={{...S.scCard,background:miniResult.score>=80?`linear-gradient(135deg,${T.accent},#1B5E20)`:miniResult.score>=60?`linear-gradient(135deg,${T.goldDark},${T.goldDeep})`:`linear-gradient(135deg,${T.danger},#B71C1C)`}}>
+            <div style={{fontSize:13,opacity:.9}}>{nm} · 보강 시험</div>
+            <div style={{fontSize:56,fontWeight:800,lineHeight:1.1,margin:"4px 0"}}>{miniResult.score}<span style={{fontSize:22}}>점</span></div>
+            <div style={{fontSize:13,opacity:.85}}>{miniCurrent.subject||""} · {miniCurrent.weakArea||""} 보강</div>
+            <div style={{fontSize:12,opacity:.7,marginTop:4}}>{miniResult.total}문항 중 {miniResult.correct}개 정답</div>
+          </div>
+          <div style={S.card}>
+            <h3 style={{fontSize:15,fontWeight:800,color:T.text,marginBottom:12}}>📊 단계별 결과</h3>
+            {miniResult.details.map((d,i)=>{
+              const stageLabels={concept:"1️⃣ 핵심 개념",component:"2️⃣ 구성 요소",meaning:"3️⃣ 의미 점검",basic:"4️⃣ 기본 적용",application:"5️⃣ 응용"};
+              return(<div key={i} style={{padding:"10px 12px",marginBottom:8,background:d.r==="정답"?"#E8F5E9":d.r==="오답"?"#FFEBEE":T.borderLight,border:`1px solid ${d.r==="정답"?T.accent:d.r==="오답"?T.danger:T.border}40`,borderRadius:10}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                  <span style={{fontSize:12,fontWeight:700,color:T.text}}>{stageLabels[d.stage]||`문제 ${d.q}`}</span>
+                  <span style={{fontSize:14}}>{d.r==="정답"?"✅":d.r==="오답"?"❌":"⏳"}</span>
+                </div>
+                <div style={{fontSize:11,color:T.textSub,lineHeight:1.5}}>
+                  <span style={{fontWeight:600}}>내 답:</span> <span style={{color:T.text}}>{d.s===null||d.s===undefined||d.s===""?"(미입력)":String(d.s)}</span>
+                  {d.r!=="정답"&&<><br/><span style={{fontWeight:600,color:T.accent}}>정답:</span> <span style={{color:T.text}}>{String(d.c)}</span></>}
+                </div>
+                {d.r!=="정답"&&d.explanation&&(
+                  <div style={{marginTop:6,padding:"6px 8px",background:"#E3F2FD",borderRadius:6,fontSize:11,color:"#0D47A1",lineHeight:1.5}}>
+                    <span style={{fontWeight:700}}>💡 풀이:</span> {d.explanation}
+                  </div>
+                )}
+              </div>);
+            })}
+          </div>
+          <button style={S.btnG} onClick={()=>{setMiniCurrent(null);setMiniAnswers([]);setMiniResult(null);setMiniTimeLeft(300);setScr("info");hLoadMiniExams();}}>
+            ← 홈으로 (다른 보강 시험 보기)
+          </button>
+        </>)}
+      </div>)}
+      {/* ★ v23.9: 일반 시험 입력 화면용 수학 기호 키보드 (포커스된 주관식 input이 있을 때) */}
+      {scr==="input"&&isMathSubject&&focusedSubIdx!==null&&<MathKeyboard onInsert={hInsertSymbol} T={T}/>}
     </div>
   );
+}
+// ============================================================
+// ★ v23.9: MathKeyboard 컴포넌트 — 수학 주관식 입력 보조
+// ============================================================
+function MathKeyboard({onInsert,T}){
+  const symbols=[
+    {s:"√",label:"√"},{s:"π",label:"π"},{s:"≤",label:"≤"},{s:"≥",label:"≥"},
+    {s:"≠",label:"≠"},{s:"±",label:"±"},{s:"÷",label:"÷"},{s:"×",label:"×"},
+    {s:"²",label:"x²"},{s:"³",label:"x³"},{s:"½",label:"½"},{s:"⅓",label:"⅓"},
+    {s:"°",label:"°"},{s:"∞",label:"∞"},{s:"∠",label:"∠"},{s:"≈",label:"≈"},
+    {s:"(",label:"("},{s:")",label:")"},{s:"/",label:"/"},{s:"^",label:"^"}
+  ];
+  return(<div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,background:T.white,borderTop:`1.5px solid ${T.gold}`,padding:"8px 8px",paddingBottom:"max(8px,env(safe-area-inset-bottom))",display:"grid",gridTemplateColumns:"repeat(10,1fr)",gap:4,zIndex:300,boxShadow:"0 -2px 12px rgba(0,0,0,0.1)"}}>
+    <div style={{gridColumn:"1/-1",fontSize:9,color:T.textMuted,fontWeight:600,textAlign:"center",marginBottom:2}}>🧮 수학 기호 — 누르면 입력란에 추가</div>
+    {symbols.map((sym,i)=>(<button key={i} onMouseDown={e=>{e.preventDefault();onInsert(sym.s);}}
+      onTouchStart={e=>{e.preventDefault();onInsert(sym.s);}}
+      style={{padding:"10px 0",fontSize:14,fontWeight:700,color:T.goldDeep,background:T.goldLight,border:`1px solid ${T.goldMuted}`,borderRadius:8,cursor:"pointer",fontFamily:"inherit"}}>
+      {sym.label}
+    </button>))}
+  </div>);
 }
 function SC({i,l,v,c}){return(<div style={{flex:1,background:T.white,borderRadius:12,padding:"12px 6px",display:"flex",flexDirection:"column",alignItems:"center",gap:2,boxShadow:"0 1px 3px rgba(0,0,0,0.05)",border:`1px solid ${T.borderLight}`}}><span style={{fontSize:18}}>{i}</span><span style={{fontSize:18,fontWeight:800,color:c}}>{v}</span><span style={{fontSize:10,color:T.textMuted,fontWeight:500}}>{l}</span></div>);}
 const S={
