@@ -4,6 +4,13 @@
 // ============================================================
 // 버전 이력
 // ─────────────────────────────────────────
+// v23.12 (2026-05-13)
+//   ★ 수학 키보드 전면 개편 — 숫자 0~9 + 사칙연산 + 기호 모두 포함 (40개 키)
+//     · ✕ 닫기 버튼 — 키보드 사라짐 → OMR 제출 버튼 보임
+//     · ⌫ 백스페이스 키
+//     · 닫은 후 다시 열기: 우하단 🧮 수학 키보드 플로팅 버튼
+//   ★ hBackspace + mathKbHidden state 신규
+//
 // v23.11 (2026-05-13)
 //   ★ 시험 분석 — 카테고리별 정답률 (문법/어휘/독해 등) 그래프
 //     · view_answer_key 응답의 categories 사용 (없으면 객관식/주관식 fallback)
@@ -67,7 +74,7 @@
 
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 
-const VERSION = "v23.11";
+const VERSION = "v23.12";
 const SHEETS_URL = "https://script.google.com/macros/s/AKfycbzablzeV_gVdLoUG-Oh4s02vNmncvteesBn3875WDF3lO176nc4YzAKj7B6zOJVECQO/exec";
 // ★ v22.2: API 절대 URL (CORS 허용)
 const GRADE_SUBJECTIVE_URL = "https://chaeum-teacher.vercel.app/api/grade-subjective";
@@ -444,6 +451,27 @@ export default function App(){
   const[focusedSubBlankIdx,setFocusedSubBlankIdx]=useState(null);  // 빈칸 multi 용
   const[focusedMiniIdx,setFocusedMiniIdx]=useState(null);   // 미니 시험용
   const isMathSubject=String(sub).indexOf("수학")>=0||String(currentExam&&currentExam.subject).indexOf("수학")>=0||String(miniCurrent&&miniCurrent.subject).indexOf("수학")>=0;
+  // ★ v23.12: 수학 키보드 닫기 상태 — 사용자가 ✕ 누르면 키보드 숨김 → 제출 버튼 보임
+  const[mathKbHidden,setMathKbHidden]=useState(false);
+  // 백스페이스 — 포커스된 입력에서 마지막 글자 지움
+  const hBackspace=()=>{
+    if(focusedMiniIdx!==null){
+      hMiniAns(focusedMiniIdx,(miniAnswers[focusedMiniIdx]||"").slice(0,-1));
+      return;
+    }
+    if(focusedSubIdx!==null){
+      const cur=ans[focusedSubIdx];
+      if(focusedSubBlankIdx!==null){
+        const curStr=typeof cur==="string"?cur:"";
+        const parts=curStr.split("|");
+        while(parts.length<=focusedSubBlankIdx)parts.push("");
+        parts[focusedSubBlankIdx]=(parts[focusedSubBlankIdx]||"").slice(0,-1);
+        hSub(focusedSubIdx,parts.join("|"));
+      }else{
+        hSub(focusedSubIdx,(typeof cur==="string"?cur:"").slice(0,-1));
+      }
+    }
+  };
   const cn=exSub?`${exSub} ${gr} ${exLv}반`:(gr?`${gr}`:"")
   const ds=isoToDot(pd);
   const isToday=pd===todayIso();
@@ -1538,7 +1566,10 @@ export default function App(){
             ← 나중에 다시 풀기
           </button>
           {/* 수학 기호 키보드 */}
-          {isMathSubject&&focusedMiniIdx!==null&&<MathKeyboard onInsert={hInsertSymbol} T={T}/>}
+          {isMathSubject&&focusedMiniIdx!==null&&!mathKbHidden&&<MathKeyboard onInsert={hInsertSymbol} onClose={()=>{setMathKbHidden(true);setFocusedMiniIdx(null);}} onBackspace={hBackspace} T={T}/>}
+          {isMathSubject&&mathKbHidden&&(
+            <button onClick={()=>setMathKbHidden(false)} style={{position:"fixed",bottom:74,right:10,padding:"10px 14px",fontSize:13,fontWeight:700,color:T.white,background:T.gold,border:"none",borderRadius:24,cursor:"pointer",fontFamily:"inherit",boxShadow:"0 2px 8px rgba(0,0,0,0.2)",zIndex:201}}>🧮 수학 키보드</button>
+          )}
         </>):(<>
           {/* 결과 화면 */}
           <div style={{...S.scCard,background:miniResult.score>=80?`linear-gradient(135deg,${T.accent},#1B5E20)`:miniResult.score>=60?`linear-gradient(135deg,${T.goldDark},${T.goldDeep})`:`linear-gradient(135deg,${T.danger},#B71C1C)`}}>
@@ -1574,28 +1605,66 @@ export default function App(){
         </>)}
       </div>)}
       {/* ★ v23.9: 일반 시험 입력 화면용 수학 기호 키보드 (포커스된 주관식 input이 있을 때) */}
-      {scr==="input"&&isMathSubject&&focusedSubIdx!==null&&<MathKeyboard onInsert={hInsertSymbol} T={T}/>}
+      {scr==="input"&&isMathSubject&&focusedSubIdx!==null&&!mathKbHidden&&<MathKeyboard onInsert={hInsertSymbol} onClose={()=>{setMathKbHidden(true);setFocusedSubIdx(null);setFocusedSubBlankIdx(null);}} onBackspace={hBackspace} T={T}/>}
+      {scr==="input"&&isMathSubject&&mathKbHidden&&(
+        <button onClick={()=>setMathKbHidden(false)} style={{position:"fixed",bottom:74,right:10,padding:"10px 14px",fontSize:13,fontWeight:700,color:T.white,background:T.gold,border:"none",borderRadius:24,cursor:"pointer",fontFamily:"inherit",boxShadow:"0 2px 8px rgba(0,0,0,0.2)",zIndex:201}}>🧮 수학 키보드</button>
+      )}
     </div>
   );
 }
 // ============================================================
 // ★ v23.9: MathKeyboard 컴포넌트 — 수학 주관식 입력 보조
+// ★ v23.12 (2026-05-13): 전면 개편 — 숫자+기호 통합 / 닫기 버튼 / 백스페이스
+//   기존 문제:
+//   - 기호만 있어서 숫자는 핸드폰 키보드 사용 → 불편함
+//   - 키보드가 닫히지 않아 제출 버튼 가려짐
+//   해결:
+//   - 숫자 0~9 포함 풀 키보드 (40개 키)
+//   - "✕ 닫기" 버튼 → 키보드 사라짐 → 제출 버튼 보임
+//   - ⌫ 백스페이스 키
 // ============================================================
-function MathKeyboard({onInsert,T}){
-  const symbols=[
-    {s:"√",label:"√"},{s:"π",label:"π"},{s:"≤",label:"≤"},{s:"≥",label:"≥"},
-    {s:"≠",label:"≠"},{s:"±",label:"±"},{s:"÷",label:"÷"},{s:"×",label:"×"},
-    {s:"²",label:"x²"},{s:"³",label:"x³"},{s:"½",label:"½"},{s:"⅓",label:"⅓"},
-    {s:"°",label:"°"},{s:"∞",label:"∞"},{s:"∠",label:"∠"},{s:"≈",label:"≈"},
-    {s:"(",label:"("},{s:")",label:")"},{s:"/",label:"/"},{s:"^",label:"^"}
+function MathKeyboard({onInsert,onClose,onBackspace,T}){
+  // 4줄 × 10키 = 40개
+  const rows = [
+    ["1","2","3","4","5","6","7","8","9","0"],
+    ["+","-","×","÷","=",".",",","(",")","⌫"],
+    ["√","π","≤","≥","≠","±","²","³","½","⅓"],
+    ["x","y","°","∠","∞","/","≈","θ","∑","CLOSE"]
   ];
-  return(<div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,background:T.white,borderTop:`1.5px solid ${T.gold}`,padding:"8px 8px",paddingBottom:"max(8px,env(safe-area-inset-bottom))",display:"grid",gridTemplateColumns:"repeat(10,1fr)",gap:4,zIndex:300,boxShadow:"0 -2px 12px rgba(0,0,0,0.1)"}}>
-    <div style={{gridColumn:"1/-1",fontSize:9,color:T.textMuted,fontWeight:600,textAlign:"center",marginBottom:2}}>🧮 수학 기호 — 누르면 입력란에 추가</div>
-    {symbols.map((sym,i)=>(<button key={i} onMouseDown={e=>{e.preventDefault();onInsert(sym.s);}}
-      onTouchStart={e=>{e.preventDefault();onInsert(sym.s);}}
-      style={{padding:"10px 0",fontSize:14,fontWeight:700,color:T.goldDeep,background:T.goldLight,border:`1px solid ${T.goldMuted}`,borderRadius:8,cursor:"pointer",fontFamily:"inherit"}}>
-      {sym.label}
-    </button>))}
+  const renderKey = (k, i) => {
+    if (k === "⌫") {
+      return (<button key={"bs"+i} type="button"
+        onMouseDown={e=>{e.preventDefault();onBackspace&&onBackspace();}}
+        onTouchStart={e=>{e.preventDefault();onBackspace&&onBackspace();}}
+        style={{padding:"10px 0",fontSize:15,fontWeight:700,color:T.white,background:T.danger,border:"none",borderRadius:6,cursor:"pointer",fontFamily:"inherit"}}>
+        ⌫
+      </button>);
+    }
+    if (k === "CLOSE") {
+      return (<button key={"cl"+i} type="button"
+        onMouseDown={e=>{e.preventDefault();onClose&&onClose();}}
+        onTouchStart={e=>{e.preventDefault();onClose&&onClose();}}
+        style={{padding:"10px 0",fontSize:11,fontWeight:800,color:T.white,background:T.textSub,border:"none",borderRadius:6,cursor:"pointer",fontFamily:"inherit"}}>
+        ✕ 닫기
+      </button>);
+    }
+    return (<button key={i+"_"+k} type="button"
+      onMouseDown={e=>{e.preventDefault();onInsert(k);}}
+      onTouchStart={e=>{e.preventDefault();onInsert(k);}}
+      style={{padding:"10px 0",fontSize:15,fontWeight:700,color:T.goldDeep,background:T.goldLight,border:`1px solid ${T.goldMuted}`,borderRadius:6,cursor:"pointer",fontFamily:"inherit"}}>
+      {k}
+    </button>);
+  };
+  return(<div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,background:T.white,borderTop:`2px solid ${T.gold}`,padding:"6px 5px",paddingBottom:"max(6px,env(safe-area-inset-bottom))",zIndex:300,boxShadow:"0 -4px 16px rgba(0,0,0,0.15)"}}>
+    <div style={{fontSize:9,color:T.textMuted,fontWeight:600,textAlign:"center",marginBottom:4,display:"flex",justifyContent:"space-between",alignItems:"center",padding:"0 4px"}}>
+      <span>🧮 수학 키보드 (숫자·기호)</span>
+      <span style={{fontSize:9,color:T.danger,fontWeight:700}}>제출은 ✕ 닫기 후</span>
+    </div>
+    {rows.map((row, ri) => (
+      <div key={ri} style={{display:"grid",gridTemplateColumns:`repeat(${row.length},1fr)`,gap:3,marginBottom:3}}>
+        {row.map((k, ki) => renderKey(k, ri*100+ki))}
+      </div>
+    ))}
   </div>);
 }
 // ============================================================
