@@ -4,6 +4,12 @@
 // ============================================================
 // 버전 이력
 // ─────────────────────────────────────────
+// v23.13 (2026-05-13)
+//   ★ 결과 화면에서 보강 시험 바로 풀기 큰 버튼 추가
+//     · 기존: "홈으로 돌아가서 풀어보세요" 작은 안내
+//     · 신규: 큰 오렌지 그라데이션 버튼 — 즉시 미니 시험 응시 화면으로 이동
+//     · 학생 동선 단축 (결과 화면 → 보강 시험 → 다음 시험으로)
+//
 // v23.12 (2026-05-13)
 //   ★ 수학 키보드 전면 개편 — 숫자 0~9 + 사칙연산 + 기호 모두 포함 (40개 키)
 //     · ✕ 닫기 버튼 — 키보드 사라짐 → OMR 제출 버튼 보임
@@ -74,7 +80,7 @@
 
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 
-const VERSION = "v23.12";
+const VERSION = "v23.13";
 const SHEETS_URL = "https://script.google.com/macros/s/AKfycbzablzeV_gVdLoUG-Oh4s02vNmncvteesBn3875WDF3lO176nc4YzAKj7B6zOJVECQO/exec";
 // ★ v22.2: API 절대 URL (CORS 허용)
 const GRADE_SUBJECTIVE_URL = "https://chaeum-teacher.vercel.app/api/grade-subjective";
@@ -1341,16 +1347,20 @@ export default function App(){
                   <div style={{marginTop: 10, padding: "8px 10px", background: "#FFF8E1", border: `1px solid #FFE082`, borderRadius: 8, fontSize: 11, color: "#5D4037", lineHeight: 1.5}}>
                     <strong style={{color: "#E65100"}}>💡 보강 필요 영역:</strong> {weakAreas.map(w => `${w.name} ${w.pct}%`).join(" · ")}<br/>
                     <span style={{fontSize: 10, color: "#8D6E63"}}>아래 정오표에서 틀린 문제 클릭하면 자세한 분석을 볼 수 있어요!</span>
-                    {/* ★ v23.9: 보강 미니 시험 자동 추천 안내 */}
-                    {(recommendingMini||miniExams.length>0)&&(
-                      <div style={{marginTop:6,padding:"6px 8px",background:"#FFE0B2",borderRadius:6,fontSize:11,color:"#E65100",fontWeight:600,display:"flex",alignItems:"center",gap:6}}>
-                        {recommendingMini?(<>
-                          <div style={{width:12,height:12,border:`2px solid #FFFFFF80`,borderTopColor:"#E65100",borderRadius:"50%",animation:"spin .8s linear infinite"}}/>
-                          📚 약점 보강 시험 준비 중... (홈 화면에 곧 표시돼요)
-                        </>):(
-                          <span>📚 추천 보강 시험 {miniExams.length}개 — 홈으로 돌아가서 풀어보세요!</span>
-                        )}
+                    {/* ★ v23.13 (2026-05-13): 보강 시험 바로 풀기 큰 버튼 (사용자 요청) */}
+                    {recommendingMini && (
+                      <div style={{marginTop:8,padding:"10px 12px",background:"#FFE0B2",borderRadius:8,fontSize:12,color:"#E65100",fontWeight:700,display:"flex",alignItems:"center",gap:8}}>
+                        <div style={{width:16,height:16,border:`2px solid #FFFFFF80`,borderTopColor:"#E65100",borderRadius:"50%",animation:"spin .8s linear infinite"}}/>
+                        📚 약점 보강 시험 준비 중... (15초 후 아래 버튼 등장)
                       </div>
+                    )}
+                    {miniExams.length > 0 && (
+                      <button onClick={()=>{
+                        const first = miniExams[0];
+                        if (first) hStartMini(first);
+                      }} style={{marginTop:10,width:"100%",padding:"14px 16px",fontSize:14,fontWeight:800,color:T.white,background:`linear-gradient(135deg,#FB8C00,#E65100)`,border:"none",borderRadius:10,cursor:"pointer",fontFamily:"inherit",boxShadow:"0 3px 10px rgba(251,140,0,0.3)",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+                        📚 보강 시험 {miniExams.length}개 — 바로 풀기 (5분)
+                      </button>
                     )}
                   </div>
                 )}
