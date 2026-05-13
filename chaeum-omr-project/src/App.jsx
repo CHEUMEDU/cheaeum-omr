@@ -4,6 +4,14 @@
 // ============================================================
 // 버전 이력
 // ─────────────────────────────────────────
+// v23.11 (2026-05-13)
+//   ★ 시험 분석 — 카테고리별 정답률 (문법/어휘/독해 등) 그래프
+//     · view_answer_key 응답의 categories 사용 (없으면 객관식/주관식 fallback)
+//     · 약점 영역 자동 식별 + 우선순위 표시
+//   ★ 객관식 풀이 즉시 생성 (v25.4 GAS + Vercel)
+//     · 정오표 객관식 오답 클릭 시 explanations 없으면 generate_explanations 자동 호출
+//     · Gemini 풀이 받아 즉시 표시 + 다음 학생부터는 캐시된 풀이 사용
+//
 // v23.10 (2026-05-13)
 //   ★ "초록=추가 / 빨강=빼야 함" DiffView 안내 삭제 (매번 노이즈 — 사용자 요청)
 //   ★ 내 성적 조회 — 날짜 강조 + 피드백 펼침 (HistoryCard 컴포넌트 신규)
@@ -59,7 +67,7 @@
 
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 
-const VERSION = "v23.10";
+const VERSION = "v23.11";
 const SHEETS_URL = "https://script.google.com/macros/s/AKfycbzablzeV_gVdLoUG-Oh4s02vNmncvteesBn3875WDF3lO176nc4YzAKj7B6zOJVECQO/exec";
 // ★ v22.2: API 절대 URL (CORS 허용)
 const GRADE_SUBJECTIVE_URL = "https://chaeum-teacher.vercel.app/api/grade-subjective";
@@ -406,6 +414,9 @@ export default function App(){
   const[ans,setAns]=useState([]);const[res,setRes]=useState(null);
   // ★ v23.8: 오답분석 데이터 — view_answer_key 응답에서 받음 (객관식 choiceExplanations + 주관식 gradingGuide)
   const[explanations,setExplanations]=useState(null);
+  // ★ v23.11: 카테고리 데이터 (영역별 정답률) + 즉시 풀이 로딩 상태
+  const[categories,setCategories]=useState(null);  // { "1": "문법", "2": "어휘", ... }
+  const[loadingExpl,setLoadingExpl]=useState(false); // 객관식 즉시 풀이 생성 중
   // ★ v23.8: 정오표 펼침 상태 (객관식 오답마다 정답·오답 분석 표시)
   const[expandedRows,setExpandedRows]=useState({});
   const[conf,setConf]=useState(false);const[sec,setSec]=useState(0);const[wo,setWo]=useState(false);
@@ -481,6 +492,7 @@ export default function App(){
           setAKey(fa);setTKey(ft);
           // ★ v23.8: 오답분석 데이터 갱신
           if(dd.explanations)setExplanations(dd.explanations);
+          if(dd.categories)setCategories(dd.categories);
           const fresh=grade(ans,fa,ft,qc);
           // 주관식 보존
           if(res&&res.det){
@@ -645,6 +657,7 @@ export default function App(){
       setAKey(freshAns);setTKey(freshTyp);
       // ★ v23.8: 오답분석 데이터 갱신 (정답 수정 시 explanations도 함께 업데이트)
       if(d.explanations)setExplanations(d.explanations);
+      if(d.categories)setCategories(d.categories);
       // 재채점 — 주관식 부분점수는 기존 결과에서 보존 (refresh 시점에 AI 재호출은 비용·시간 부담)
       const fresh=grade(ans,freshAns,freshTyp,qc);
       // 기존 res 의 주관식 채점결과(gradeResult) · overallComment 가 있으면 보존
@@ -701,6 +714,7 @@ export default function App(){
           setAKey(effAKey);setTKey(effTKey);
           // ★ v23.8: 오답분석 데이터 받기 (정오표 펼침에서 사용)
           if(dd.explanations)setExplanations(dd.explanations);
+          if(dd.categories)setCategories(dd.categories);
         }
       }catch(_e){/* 네트워크 실패 시 기존 aKey 사용 — 채점 자체는 진행 */}
     }
@@ -987,7 +1001,7 @@ export default function App(){
       }
     }
   };
-  const hReset=()=>{setAns(Array(qc).fill(null));setRes(null);setWo(false);setSendOk(null);setScr("info");setSec(0);setNm("");setSub("");setGr("");setLv("");setEt("");setSelTeacher("");setAKey(null);setTKey(null);setQNumMap(null);setALoad(false);setANF(false);setTq(100);setCq("");setPd(todayIso());setTodayExams(null);setGradingSub(false);setGradingProgress({done:0,total:0});setGradingMode("strict");setCurrentExam(null);setRefreshing(false);setExplanations(null);setExpandedRows({});setMiniCurrent(null);setMiniAnswers([]);setMiniResult(null);setMiniTimeLeft(300);setRecommendedNew(0);setFocusedSubIdx(null);setFocusedSubBlankIdx(null);setFocusedMiniIdx(null);};
+  const hReset=()=>{setAns(Array(qc).fill(null));setRes(null);setWo(false);setSendOk(null);setScr("info");setSec(0);setNm("");setSub("");setGr("");setLv("");setEt("");setSelTeacher("");setAKey(null);setTKey(null);setQNumMap(null);setALoad(false);setANF(false);setTq(100);setCq("");setPd(todayIso());setTodayExams(null);setGradingSub(false);setGradingProgress({done:0,total:0});setGradingMode("strict");setCurrentExam(null);setRefreshing(false);setExplanations(null);setCategories(null);setExpandedRows({});setMiniCurrent(null);setMiniAnswers([]);setMiniResult(null);setMiniTimeLeft(300);setRecommendedNew(0);setFocusedSubIdx(null);setFocusedSubBlankIdx(null);setFocusedMiniIdx(null);};
   const scTo=(i)=>{setSec(i);sRefs.current[i]?.scrollIntoView({behavior:"smooth",block:"start"});};
   const goUA=()=>{const i=ans.findIndex(a=>a===null||a==="");if(i===-1)return alert("모든 문항에 답했습니다!");setSec(Math.floor(i/SEC));setTimeout(()=>{document.getElementById(`q-${i}`)?.scrollIntoView({behavior:"smooth",block:"center"});},100);};
   const clrAll=()=>{if(window.confirm("모든 답안을 초기화할까요?"))setAns(Array(qc).fill(null));};
@@ -1208,6 +1222,7 @@ export default function App(){
           )}
           {(res.totalQ-(res.to+res.sc))>0&&<div style={{padding:"8px 14px",borderRadius:10,marginBottom:10,fontSize:12,fontWeight:600,textAlign:"center",background:"#FFF3E0",color:"#E65100"}}>미입력 {res.totalQ-(res.to+res.sc)}문항은 0점 처리됩니다.</div>}
           {/* ★ v23.8: 분석 리포트 (방식 5) — 점수 카드 아래 추가 */}
+          {/* ★ v23.11: 카테고리 데이터 있으면 문법/어휘/독해 등 영역별 분석 우선 표시 */}
           {res.det && res.det.length > 0 && (() => {
             const correctObj = res.oc;
             const correctSub = res.subCorrect || 0;
@@ -1216,14 +1231,61 @@ export default function App(){
             const wrongSub = res.totalSub - correctSub - Math.max(0, partialSub);
             const objPct = res.totalObj > 0 ? Math.round((correctObj / res.totalObj) * 100) : 0;
             const subPct = res.totalSub > 0 ? Math.round((correctSub / res.totalSub) * 100) : 0;
+            // ★ v23.11: categories 가 있으면 영역별 정답률 계산
+            const catStats = {};
+            if (categories && typeof categories === "object") {
+              res.det.forEach(d => {
+                const cat = categories[String(d.q)] || categories[d.q];
+                if (!cat) return;
+                if (!catStats[cat]) catStats[cat] = {total: 0, correct: 0};
+                catStats[cat].total++;
+                if (d.r === "정답") catStats[cat].correct++;
+                else if (d.r === "부분정답") catStats[cat].correct += 0.5;
+              });
+            }
+            const catList = Object.keys(catStats).map(c => {
+              const s = catStats[c];
+              return {
+                name: c,
+                total: s.total,
+                correct: s.correct,
+                pct: s.total > 0 ? Math.round((s.correct / s.total) * 100) : 0
+              };
+            }).sort((a,b) => a.pct - b.pct);  // 약한 순서대로
+            const hasCat = catList.length > 0;
             // 약점 영역 판단 (80% 미만)
             const weakAreas = [];
-            if (res.totalObj > 0 && objPct < 80) weakAreas.push({name: "객관식", pct: objPct, color: T.goldDark});
-            if (res.totalSub > 0 && subPct < 80) weakAreas.push({name: "주관식", pct: subPct, color: T.accent});
+            if (hasCat) {
+              catList.filter(c => c.pct < 80).forEach(c => weakAreas.push({name: c.name, pct: c.pct, color: T.goldDark}));
+            } else {
+              if (res.totalObj > 0 && objPct < 80) weakAreas.push({name: "객관식", pct: objPct, color: T.goldDark});
+              if (res.totalSub > 0 && subPct < 80) weakAreas.push({name: "주관식", pct: subPct, color: T.accent});
+            }
+            // 카테고리별 색깔 (이쁘게)
+            const catColors = ["#1976D2", "#388E3C", "#7B1FA2", "#F57C00", "#C62828", "#00838F", "#5D4037"];
             return (
               <div style={{...S.card, marginBottom: 12}}>
-                <h3 style={{fontSize: 14, fontWeight: 700, color: T.text, marginBottom: 10}}>📊 시험 분석</h3>
-                {/* 영역별 정답률 막대 */}
+                <h3 style={{fontSize: 14, fontWeight: 700, color: T.text, marginBottom: 10}}>
+                  📊 시험 분석{hasCat?` — 영역별 정답률`:``}
+                </h3>
+                {/* ★ v23.11: 카테고리별 막대그래프 (문법/어휘/독해 등) — 있으면 최상단 */}
+                {hasCat && catList.map((c, ci) => {
+                  const barColor = c.pct >= 80 ? T.accent : c.pct >= 60 ? T.goldDark : T.danger;
+                  const labelColor = catColors[ci % catColors.length];
+                  return (
+                    <div key={ci} style={{marginBottom: 8}}>
+                      <div style={{display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 11, color: T.textSub}}>
+                        <span style={{color: labelColor, fontWeight: 700}}>📚 {c.name} ({c.correct}/{c.total})</span>
+                        <span style={{fontWeight: 700, color: barColor}}>{c.pct}%</span>
+                      </div>
+                      <div style={{height: 10, background: T.borderLight, borderRadius: 5, overflow: "hidden"}}>
+                        <div style={{height: "100%", width: `${c.pct}%`, background: `linear-gradient(90deg, ${labelColor}, ${barColor})`, transition: "width 0.5s"}}/>
+                      </div>
+                    </div>
+                  );
+                })}
+                {hasCat && <div style={{height: 1, background: T.borderLight, margin: "8px 0"}}/>}
+                {/* 객관식/주관식 막대 (카테고리 있어도 보조 정보로 표시) */}
                 {res.totalObj > 0 && (
                   <div style={{marginBottom: 8}}>
                     <div style={{display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 11, color: T.textSub}}>
@@ -1279,12 +1341,51 @@ export default function App(){
               <div style={S.tH}><span style={{flex:"0 0 36px",textAlign:"center"}}>#</span><span style={{flex:"0 0 36px",textAlign:"center"}}>유형</span><span style={{flex:1,textAlign:"center"}}>내 답</span><span style={{flex:1,textAlign:"center"}}>정답</span><span style={{flex:"0 0 60px",textAlign:"center"}}>결과</span></div>
               {res.det.filter(d=>wo?d.r==="오답"||d.r==="부분정답":true).map(d=>{
                 // ★ v23.8: 객관식 오답에만 펼침 기능 (choiceExplanations 있을 때)
+                // ★ v23.11: explanations 없어도 클릭 시 즉시 Gemini 풀이 생성 (옛 시험 대응)
                 const qExpl = explanations && explanations[String(d.q)];
-                const canExpand = d.t === "obj" && d.r === "오답" && qExpl && (qExpl.explanation || qExpl.choiceExplanations);
+                const hasExpl = qExpl && (qExpl.explanation || qExpl.choiceExplanations);
+                const canExpand = d.t === "obj" && d.r === "오답";  // ★ v23.11: explanations 없어도 펼침 가능
                 const isExpanded = expandedRows[d.q];
+                // 클릭 핸들러: explanations 있으면 즉시 펼침 / 없으면 Gemini 호출
+                const onClickRow = canExpand ? () => {
+                  if (hasExpl) {
+                    setExpandedRows(p => ({...p, [d.q]: !p[d.q]}));
+                  } else if (currentExam && !loadingExpl) {
+                    // 즉시 풀이 생성
+                    setLoadingExpl(true);
+                    setExpandedRows(p => ({...p, [d.q]: true}));
+                    (async () => {
+                      try {
+                        const params = new URLSearchParams();
+                        params.set("action", "generate_explanations");
+                        const body = {
+                          action: "generate_explanations",
+                          questionNumbers: [d.q]
+                        };
+                        if (currentExam.folderId) body.folderId = currentExam.folderId;
+                        else {
+                          body.subject = currentExam.subject || sub || "";
+                          body.grade = currentExam.grade || gr || "";
+                          body.level = currentExam.level || lv || "";
+                          body.examType = currentExam.examType || "";
+                        }
+                        const rsp = await fetch(SHEETS_URL, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+                        const dd = await rsp.json();
+                        if (dd.result === "ok" && dd.explanations) {
+                          setExplanations(prev => ({...(prev||{}), ...dd.explanations}));
+                        } else {
+                          alert("풀이 생성 실패: " + (dd.message || "다시 시도해주세요"));
+                        }
+                      } catch(_e) {
+                        alert("네트워크 오류로 풀이 생성 실패");
+                      }
+                      setLoadingExpl(false);
+                    })();
+                  }
+                } : undefined;
                 return (
                 <div key={d.q} style={{...S.tR,background:d.r==="정답"?"#F1F8E9":d.r==="오답"?"#FFF5F5":d.r==="부분정답"?"#FFF8E1":T.goldPale,flexDirection:"column",alignItems:"stretch",cursor:canExpand?"pointer":"default"}}
-                  onClick={canExpand ? () => setExpandedRows(p => ({...p, [d.q]: !p[d.q]})) : undefined}>
+                  onClick={onClickRow}>
                   <div style={{display:"flex",alignItems:"center",width:"100%"}}>
                     <span style={{flex:"0 0 36px",textAlign:"center",fontWeight:700,fontSize:qNumMap?10:12,color:T.textSub}}>{qNumMap?qNumMap[String(d.q)]||d.q:d.q}</span>
                     <span style={{flex:"0 0 36px",textAlign:"center",fontSize:10,fontWeight:700,color:d.t==="sub"?T.accent:T.goldDark}}>{d.t==="sub"?"주관":"객관"}</span>
@@ -1292,8 +1393,20 @@ export default function App(){
                     <span style={{flex:1,textAlign:"center",fontWeight:600,fontSize:13,color:T.goldDark,wordBreak:"break-word",padding:"0 4px"}}>{d.t==="sub"?(d.c||"–"):vl(d.c)}</span>
                     <span style={{flex:"0 0 60px",textAlign:"center",fontSize:14}}>{d.r==="정답"?"✅":d.r==="오답"?"❌":d.r==="부분정답"?<span style={{fontSize:11,fontWeight:700,color:"#B8860B"}}>{d.partial}</span>:"⏳"}</span>
                   </div>
+                  {/* ★ v23.11: 풀이 데이터 없을 때 로딩 안내 */}
+                  {canExpand && isExpanded && !hasExpl && loadingExpl && (
+                    <div style={{padding:"10px 12px",marginTop:6,marginLeft:36,background:"#E3F2FD",border:`1px solid #1976D2`,borderRadius:8,fontSize:11,color:"#0D47A1",lineHeight:1.6,display:"flex",alignItems:"center",gap:8}}>
+                      <div style={{width:14,height:14,border:`2px solid #BBDEFB`,borderTopColor:"#1976D2",borderRadius:"50%",animation:"spin .8s linear infinite"}}/>
+                      <span>AI 가 풀이를 만드는 중... (5~10초 소요)</span>
+                    </div>
+                  )}
+                  {canExpand && isExpanded && !hasExpl && !loadingExpl && (
+                    <div style={{padding:"8px 12px",marginTop:6,marginLeft:36,background:T.dangerLight,border:`1px solid ${T.danger}`,borderRadius:8,fontSize:11,color:T.danger,lineHeight:1.6}}>
+                      풀이를 가져올 수 없어요. 다시 클릭해주세요.
+                    </div>
+                  )}
                   {/* ★ v23.8: 객관식 오답 펼침 — choiceExplanations 표시 (방식 1) */}
-                  {canExpand && isExpanded && (
+                  {canExpand && isExpanded && hasExpl && (
                     <div style={{padding:"10px 12px",marginTop:6,marginLeft:36,background:T.white,border:`1px solid ${T.borderLight}`,borderRadius:8,fontSize:11,color:T.text,lineHeight:1.6}}>
                       {qExpl.explanation && (
                         <div style={{marginBottom:8,padding:"6px 8px",background:"#E8F5E9",borderLeft:`3px solid ${T.accent}`,borderRadius:4}}>
@@ -1325,7 +1438,7 @@ export default function App(){
                   )}
                   {canExpand && !isExpanded && (
                     <div style={{marginTop:3,marginLeft:36,fontSize:10,color:T.goldDark,fontWeight:600}}>
-                      ▼ 클릭하면 정답·오답 분석 보기
+                      ▼ 클릭 — {hasExpl?"풀이 보기":"AI 풀이 받기 (5~10초)"}
                     </div>
                   )}
                   {/* ★ v23.7: 오답·부분정답 주관식 — DiffView(수정가이드) + 문법팁, 채움Tip 제거 */}
