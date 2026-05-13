@@ -4,6 +4,14 @@
 // ============================================================
 // 버전 이력
 // ─────────────────────────────────────────
+// v23.10 (2026-05-13)
+//   ★ "초록=추가 / 빨강=빼야 함" DiffView 안내 삭제 (매번 노이즈 — 사용자 요청)
+//   ★ 내 성적 조회 — 날짜 강조 + 피드백 펼침 (HistoryCard 컴포넌트 신규)
+//     · 날짜 카드 상단에 큰 글씨 (YYYY년 M월 D일 (요일))
+//     · "📖 풀이·정답 보기" 버튼 — view_answer_key 호출 → choiceExplanations 표시
+//     · 과거 시험도 채점 결과 화면과 동일한 피드백 확인 가능
+//   ★ student_history 응답 확장 (subject/grade/level/teacher/folderId/answers 추가)
+//
 // v23.9 (2026-05-13)
 //   ★ 보강 미니 시험 자동 추천 + 응시 시스템 (Phase 4)
 //     · 채점 결과 후 자동으로 GAS recommend_mini_exam 호출 (약점 영역 분석)
@@ -51,7 +59,7 @@
 
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 
-const VERSION = "v23.9";
+const VERSION = "v23.10";
 const SHEETS_URL = "https://script.google.com/macros/s/AKfycbzablzeV_gVdLoUG-Oh4s02vNmncvteesBn3875WDF3lO176nc4YzAKj7B6zOJVECQO/exec";
 // ★ v22.2: API 절대 URL (CORS 허용)
 const GRADE_SUBJECTIVE_URL = "https://chaeum-teacher.vercel.app/api/grade-subjective";
@@ -703,6 +711,9 @@ export default function App(){
         body:JSON.stringify({
           action:"student_answer",
           name:nm,phone:ph,className:cn,subject:sub,grade:gr,level:lv,examName:et,date:ds,
+          // ★ v23.10: teacher + folderId 명시 전송 — class_grades 선생님 매핑 정확도 개선
+          teacher: (currentExam && currentExam.teacher) || selTeacher || "",
+          folderId: (currentExam && currentExam.folderId) || "",
           totalGraded:initial?initial.to+initial.sc:ac,
           score:initial?initial.score:null,
           correct:initial?initial.oc:null,
@@ -1084,13 +1095,8 @@ export default function App(){
             {history.length===0?(<div style={{padding:"14px",background:T.borderLight,borderRadius:10,color:T.textMuted,fontSize:13,textAlign:"center"}}>아직 제출한 시험이 없습니다.</div>):(
               <>
                 <div style={{fontSize:12,fontWeight:700,color:T.goldDeep,marginBottom:8}}>총 {history.length}건</div>
-                {history.map((h,i)=>(<div key={i} style={{padding:"12px 14px",marginBottom:6,background:T.goldPale,borderRadius:10,border:`1px solid ${T.goldMuted}`}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:4}}>
-                    <span style={{fontSize:13,fontWeight:700,color:T.text}}>{h.className} · {h.examName}</span>
-                    <span style={{fontSize:18,fontWeight:800,color:h.score>=90?T.accent:h.score>=70?T.goldDark:T.danger}}>{h.score!=null?`${h.score}점`:"—"}</span>
-                  </div>
-                  <div style={{fontSize:11,color:T.textMuted}}>{h.date} · 정답 {h.correct||0} / 오답 {h.wrong||0}{h.wrongQuestions?` · 틀린 문항: ${h.wrongQuestions}`:""}</div>
-                </div>))}
+                {/* ★ v23.10: 피드백 펼침 기능 + 날짜 강조 */}
+                {history.map((h,i)=>(<HistoryCard key={i} h={h} idx={i} nm={nm} ph={ph} sheetsUrl={SHEETS_URL} T={T}/>))}
               </>)}
           </div>)}
         </div>
@@ -1330,11 +1336,7 @@ export default function App(){
                         <span style={{fontWeight:700,color:d.r==="오답"?T.danger:T.goldDark,marginRight:4}}>📝 학생답:</span>
                         {d.s?<DiffView correct={d.c||""} student={d.s||""} T={T}/>:<span style={{color:T.danger,fontStyle:"italic"}}>(빈칸)</span>}
                       </div>
-                      <div style={{fontSize:9,color:T.textMuted,marginBottom:3}}>
-                        <span style={{background:"#e8f5e9",color:"#2E7D32",padding:"0 4px",borderRadius:2,marginRight:4}}>초록</span>= 추가 필요 ·
-                        <span style={{background:"#ffebee",color:"#C62828",padding:"0 4px",borderRadius:2,margin:"0 4px",textDecoration:"line-through"}}>빨강</span>= 빼야 함
-                      </div>
-                      {/* ★ v23.7: 문법팁 유지 (채움Tip 제거) */}
+                      {/* ★ v23.7: 문법팁 유지 (채움Tip 제거) — v23.10: "초록=추가/빨강=빼야 함" 안내 삭제 (중복 노이즈) */}
                       {d.gradeResult?.grammarTip&&(
                         <div style={{marginTop:6,padding:"6px 8px",background:"#E3F2FD",border:`1px solid #90CAF9`,borderRadius:6,fontSize:11,color:"#0D47A1",lineHeight:1.6,whiteSpace:"pre-wrap"}}>
                           <span style={{fontWeight:700}}>💡 문법 팁:</span> {d.gradeResult.grammarTip}
@@ -1482,6 +1484,164 @@ function MathKeyboard({onInsert,T}){
       {sym.label}
     </button>))}
   </div>);
+}
+// ============================================================
+// ★ v23.10 (2026-05-13): HistoryCard — 내 성적 카드 + 피드백 펼침
+// ============================================================
+//   - 날짜 강조 (상단 큰 글씨)
+//   - 펼침 시 view_answer_key 호출 → explanations 표시
+//   - 학생 답안(studentAnswers JSON) 기반 정오표 + choiceExplanations
+function HistoryCard({h,idx,nm,ph,sheetsUrl,T}){
+  const [expanded, setExpanded] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [feedback, setFeedback] = useState(null);  // {answerKey, types, explanations}
+  const [err, setErr] = useState("");
+
+  // 날짜 포맷: "2026-05-13" → "2026년 5월 13일 (수)"
+  const fmtDate = (s) => {
+    if (!s) return "";
+    const m = String(s).match(/(\d{4})[^\d](\d{1,2})[^\d](\d{1,2})/);
+    if (!m) return s;
+    const d = new Date(Number(m[1]), Number(m[2])-1, Number(m[3]));
+    const dow = ["일","월","화","수","목","금","토"][d.getDay()];
+    return `${m[1]}년 ${Number(m[2])}월 ${Number(m[3])}일 (${dow})`;
+  };
+
+  const loadFeedback = async () => {
+    if (feedback) { setExpanded(!expanded); return; }
+    setExpanded(true);
+    setLoading(true);
+    setErr("");
+    try {
+      const params = new URLSearchParams({action: "view_answer_key"});
+      if (h.folderId) params.set("folderId", h.folderId);
+      else {
+        params.set("subject", h.subject || "");
+        params.set("grade", h.grade || "");
+        params.set("level", h.level || "");
+        params.set("examType", h.examName || "");
+        if (h.teacher) params.set("teacher", h.teacher);
+        if (h.date) params.set("date", h.date);
+      }
+      const r = await fetch(`${sheetsUrl}?${params.toString()}`);
+      const d = await r.json();
+      if (d.result === "ok") {
+        setFeedback({
+          answers: d.answers || {},
+          types: d.types || {},
+          explanations: d.explanations || {}
+        });
+      } else {
+        setErr(d.message || "피드백을 불러올 수 없습니다.");
+      }
+    } catch (e) {
+      setErr("네트워크 오류: " + String(e));
+    }
+    setLoading(false);
+  };
+
+  // 학생 답안 파싱
+  const studentAns = (() => {
+    if (!h.studentAnswers) return null;
+    try { return JSON.parse(h.studentAnswers); } catch (e) { return null; }
+  })();
+
+  // 주관식 상세 파싱 (피드백 + 부분점수)
+  const subjDetails = (() => {
+    if (!h.subjectiveDetails) return null;
+    try { return JSON.parse(h.subjectiveDetails); } catch (e) { return null; }
+  })();
+  const subjMap = {};
+  if (Array.isArray(subjDetails)) {
+    subjDetails.forEach(d => { subjMap[String(d.q)] = d; });
+  }
+
+  const scoreColor = h.score >= 90 ? T.accent : h.score >= 70 ? T.goldDark : T.danger;
+
+  return (
+    <div style={{padding:"14px",marginBottom:8,background:T.white,borderRadius:12,border:`1.5px solid ${expanded?T.goldDark:T.goldMuted}`,boxShadow:expanded?"0 2px 8px rgba(0,0,0,0.08)":"none",transition:"all 0.2s"}}>
+      {/* 날짜 강조 */}
+      <div style={{fontSize:11,color:T.goldDeep,fontWeight:700,marginBottom:6,padding:"3px 8px",background:T.goldPale,borderRadius:6,display:"inline-block"}}>
+        📅 {fmtDate(h.date)}
+      </div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:4}}>
+        <span style={{fontSize:13,fontWeight:700,color:T.text}}>{h.className} · {h.examName}</span>
+        <span style={{fontSize:22,fontWeight:800,color:scoreColor}}>{h.score!=null?`${h.score}점`:"—"}</span>
+      </div>
+      <div style={{fontSize:11,color:T.textMuted,marginBottom:8}}>
+        정답 {h.correct||0} / 오답 {h.wrong||0}
+        {h.wrongQuestions?` · 틀린 문항: ${h.wrongQuestions}`:""}
+      </div>
+      <button onClick={loadFeedback} style={{width:"100%",padding:"8px 12px",fontSize:12,fontWeight:700,borderRadius:8,border:`1.5px solid ${T.goldDark}`,background:expanded?T.goldDark:T.white,color:expanded?T.white:T.goldDeep,cursor:"pointer",fontFamily:"inherit"}}>
+        {expanded?"▲ 피드백 접기":"📖 풀이·정답 보기"}
+      </button>
+      {expanded && (
+        <div style={{marginTop:10,padding:"10px",background:T.bg,borderRadius:8}}>
+          {loading && <div style={{textAlign:"center",fontSize:11,color:T.textMuted,padding:"8px"}}>피드백 불러오는 중...</div>}
+          {err && <div style={{padding:"8px",background:T.dangerLight,color:T.danger,fontSize:11,borderRadius:6}}>{err}</div>}
+          {feedback && !loading && (() => {
+            const wrongQs = String(h.wrongQuestions||"").split(",").map(s=>s.trim()).filter(Boolean);
+            if (wrongQs.length === 0) {
+              return <div style={{padding:"8px",fontSize:12,color:T.accent,fontWeight:600,textAlign:"center"}}>🎉 만점! 틀린 문항이 없어요.</div>;
+            }
+            return (
+              <div>
+                <div style={{fontSize:11,fontWeight:700,color:T.textMuted,marginBottom:6}}>📋 틀린 문항 분석 ({wrongQs.length}개)</div>
+                {wrongQs.map((qn, qi) => {
+                  const ex = feedback.explanations[qn] || feedback.explanations[String(qn)] || null;
+                  const correctAns = feedback.answers[qn] || feedback.answers[String(qn)] || "";
+                  const studentAnswer = studentAns ? (Array.isArray(studentAns)?studentAns[Number(qn)-1]:studentAns[qn]) : null;
+                  const subjFB = subjMap[qn];
+                  const isObjType = !ex || !ex.gradingGuide;  // 객관식 추정
+                  return (
+                    <div key={qi} style={{padding:"8px 10px",marginBottom:6,background:T.white,border:`1px solid ${T.dangerLight}`,borderRadius:8}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:4}}>
+                        <span style={{fontSize:12,fontWeight:700,color:T.danger}}>❌ {qn}번</span>
+                        <span style={{fontSize:10,color:T.textMuted}}>
+                          {studentAnswer!==null&&studentAnswer!==undefined?`내 답: ${studentAnswer}`:""}
+                          {correctAns?` · 정답: ${correctAns}`:""}
+                        </span>
+                      </div>
+                      {ex && ex.explanation && (
+                        <div style={{fontSize:11,color:T.text,lineHeight:1.5,padding:"4px 0"}}>
+                          <span style={{fontWeight:700,color:T.accent}}>💡 풀이: </span>{ex.explanation}
+                        </div>
+                      )}
+                      {ex && ex.choiceExplanations && (
+                        <div style={{marginTop:4,fontSize:10,color:T.textSub,lineHeight:1.5}}>
+                          {[1,2,3,4,5].map(n => {
+                            const ce = ex.choiceExplanations[String(n)] || ex.choiceExplanations[n];
+                            if (!ce) return null;
+                            const isCorr = String(correctAns)===String(n);
+                            const isMine = String(studentAnswer)===String(n);
+                            return (
+                              <div key={n} style={{padding:"2px 0",color:isCorr?T.accent:isMine?T.danger:T.textMuted}}>
+                                {["①","②","③","④","⑤"][n-1]} {isCorr?"✓ ":""}{isMine?"내 답 ":""}{ce}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {subjFB && subjFB.reasoning && (
+                        <div style={{marginTop:4,padding:"6px 8px",background:T.goldPale,borderRadius:6,fontSize:10,color:T.text,lineHeight:1.5}}>
+                          <span style={{fontWeight:700,color:T.goldDark}}>📝 채점 의견: </span>{subjFB.reasoning}
+                        </div>
+                      )}
+                      {!ex && (
+                        <div style={{fontSize:10,color:T.textMuted,fontStyle:"italic",padding:"4px 0"}}>
+                          이 시험의 풀이가 등록되지 않았어요. (선생님께 문의)
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+        </div>
+      )}
+    </div>
+  );
 }
 function SC({i,l,v,c}){return(<div style={{flex:1,background:T.white,borderRadius:12,padding:"12px 6px",display:"flex",flexDirection:"column",alignItems:"center",gap:2,boxShadow:"0 1px 3px rgba(0,0,0,0.05)",border:`1px solid ${T.borderLight}`}}><span style={{fontSize:18}}>{i}</span><span style={{fontSize:18,fontWeight:800,color:c}}>{v}</span><span style={{fontSize:10,color:T.textMuted,fontWeight:500}}>{l}</span></div>);}
 const S={
