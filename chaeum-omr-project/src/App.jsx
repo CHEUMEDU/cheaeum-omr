@@ -4,6 +4,10 @@
 // ============================================================
 // 버전 이력
 // ─────────────────────────────────────────
+// v23.16 (2026-05-13)
+//   ★ v27.1 캐시 활용 — 트렌드 차트가 get_student_stats_fast 호출 (10초 → 0.5초)
+//   ★ 미스 시 student_history 폴백 (기존 데이터 호환)
+//
 // v23.15 (2026-05-13)
 //   ★ 객관식 즉시 풀이 CORS 우회 (text/plain 으로 변경)
 //     · 기존: Content-Type: application/json → preflight → 차단 → 풀이 실패
@@ -94,7 +98,7 @@
 
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 
-const VERSION = "v23.15";
+const VERSION = "v23.16";
 const SHEETS_URL = "https://script.google.com/macros/s/AKfycbzablzeV_gVdLoUG-Oh4s02vNmncvteesBn3875WDF3lO176nc4YzAKj7B6zOJVECQO/exec";
 // ★ v22.2: API 절대 URL (CORS 허용)
 const GRADE_SUBJECTIVE_URL = "https://chaeum-teacher.vercel.app/api/grade-subjective";
@@ -981,15 +985,23 @@ export default function App(){
     return ()=>clearTimeout(t);
   },[scr,miniTimeLeft,miniCurrent,miniResult]);
   // ★ v23.14 (2026-05-13): 결과 화면 진입 시 학생 히스토리 로드 (트렌드 차트용)
+  // ★ v23.16 (2026-05-13): get_student_stats_fast 캐시 우선 (10초 → 0.5초), 미스 시 student_history 폴백
   useEffect(()=>{
     if(scr!=="result"||!nm||!ph)return;
-    if(trendHistory!==null)return;  // 한 번만 로드
+    if(trendHistory!==null)return;
     (async()=>{
       try {
+        // 1) 캐시 먼저 (트렌드 + 카테고리 통계 즉시 조회)
+        const fastR = await fetch(`${SHEETS_URL}?action=get_student_stats_fast&name=${encodeURIComponent(nm.trim())}&phone=${encodeURIComponent(ph)}`);
+        const fastD = await fastR.json();
+        if (fastD.result === "ok" && fastD.student && fastD.student.recentScores && fastD.student.recentScores.length > 0) {
+          setTrendHistory(fastD.student.recentScores);
+          return;
+        }
+        // 2) 캐시 미스 → 기존 student_history 폴백
         const r = await fetch(`${SHEETS_URL}?action=student_history&name=${encodeURIComponent(nm.trim())}&phone=${encodeURIComponent(ph)}`);
         const d = await r.json();
         if(d.result==="ok"){
-          // 최근 5회만 (date 기준 내림차순 → 오름차순으로 reverse)
           const records = (d.records||[]).filter(r=>r.score!==null).slice(0,5).reverse();
           setTrendHistory(records);
         } else {
