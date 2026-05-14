@@ -4,6 +4,16 @@
 // ============================================================
 // 버전 이력
 // ─────────────────────────────────────────
+// v23.17 (2026-05-14)
+//   ★ "정답 새로고침" 버튼 제거 (가시성 낮고 자동 갱신 useEffect 가 이미 동작)
+//   ★ 🚨 미니 보강시험 안 뜨던 버그 픽스 (2건)
+//     1) list_mini_exam_progress 응답 키 — GAS 는 items 반환, 학생앱이 d.exams 로 읽어서 항상 빈 배열
+//        → const list = d.items || d.exams || [] 로 둘 다 호환
+//     2) recommend_mini_exam fetch — mode:"no-cors" + application/json 으로 응답 못 읽음
+//        → text/plain 으로 변경 + 응답에서 generated 길이로 즉시 알림
+//   ★ 카테고리 라벨 개선 — "1, 2, -1" 같은 숫자만 있으면 무시 → 객관식/주관식 폴백
+//     (GAS rebuildCategoriesBadOnly() 로 재분석 가능)
+//
 // v23.16 (2026-05-13)
 //   ★ v27.1 캐시 활용 — 트렌드 차트가 get_student_stats_fast 호출 (10초 → 0.5초)
 //   ★ 미스 시 student_history 폴백 (기존 데이터 호환)
@@ -98,7 +108,7 @@
 
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 
-const VERSION = "v23.16";
+const VERSION = "v23.17";
 const SHEETS_URL = "https://script.google.com/macros/s/AKfycbzablzeV_gVdLoUG-Oh4s02vNmncvteesBn3875WDF3lO176nc4YzAKj7B6zOJVECQO/exec";
 // ★ v22.2: API 절대 URL (CORS 허용)
 const GRADE_SUBJECTIVE_URL = "https://chaeum-teacher.vercel.app/api/grade-subjective";
@@ -906,8 +916,11 @@ export default function App(){
       const r=await fetch(`${SHEETS_URL}?${params.toString()}`);
       const d=await r.json();
       if(d.result==="ok"){
+        // ★ v23.17 (2026-05-14) 🚨 핵심 픽스 — GAS 가 items 로 반환하는데 학생앱이 exams 로 읽어서 항상 빈 배열
+        //   → items 우선, exams 폴백 (구버전 호환)
+        const list = d.items || d.exams || [];
         // pending/in_progress 만 (완료된 시험은 숨김)
-        const active=(d.exams||[]).filter(e=>e.status!=="완료"&&e.status!=="마감초과");
+        const active = list.filter(e=>e.status!=="완료"&&e.status!=="마감초과");
         setMiniExams(active);
       }
     }catch(_e){/* 조용히 실패 */}
@@ -1044,11 +1057,16 @@ export default function App(){
           wrongQuestions:res.det.filter(d=>d.r==="오답"||d.r==="부분정답").map(d=>d.q),
           teacher:currentExam.teacher||""
         };
-        await fetch(SHEETS_URL,{method:"POST",mode:"no-cors",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-        // 약간 대기 후 미니 시험 목록 재조회 (GAS가 큐에 등록 + 처리할 시간)
+        // ★ v23.17 (2026-05-14): mode:"no-cors" + application/json 조합은 CORS preflight 차단 → 요청 실패
+        //   → text/plain 으로 변경 (preflight 안 발생) + 응답도 받아 결과 확인
+        const rsp = await fetch(SHEETS_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(body)});
+        let rspJson = null;
+        try { rspJson = await rsp.json(); } catch(_eRJ){}
+        // 응답에서 generated 길이로 즉시 알 수 있음
+        const justGenerated = rspJson && Array.isArray(rspJson.generated) ? rspJson.generated.filter(g=>!g.error).length : 0;
         if(!cancelled){
-          // 대기 5초 (큐 등록만 거의 즉시. 실제 문제 생성은 클로드 데스크탑이 처리 — 안내 메시지만)
-          setTimeout(()=>{if(!cancelled){setRecommendedNew(1);hLoadMiniExams();}},2000);
+          // Vercel API 가 5문항 생성 후 시트 등록까지 거의 즉시 — 1.5초 후 목록 재조회
+          setTimeout(()=>{if(!cancelled){setRecommendedNew(justGenerated||1);hLoadMiniExams();}},1500);
         }
       }catch(_e){/* 조용히 실패 */}
       if(!cancelled)setRecommendingMini(false);
@@ -1257,12 +1275,7 @@ export default function App(){
             <div style={{fontSize:11,opacity:.65,marginBottom:0}}>📌 100점 만점{res.isMixed?` (객관식 ${res.objMaxScore}점 + 주관식 ${res.subMaxScore}점, 주관식 1.5배 가중치)`:""}</div>
             {/* ★ v22.4: "오답을 복습하세요!" 제거 — 총평으로 대체 */}
           </div>
-          {/* ★ v23.6: 정답 새로고침 버튼 — 선생님이 정답을 고친 경우 즉시 재채점 */}
-          {currentExam&&(
-            <div style={{display:"flex",gap:8,marginBottom:12}}>
-              <button onClick={hRefreshResult} disabled={refreshing||gradingSub} style={{flex:1,padding:"10px 14px",fontSize:13,fontWeight:700,borderRadius:10,border:`1.5px solid ${T.gold}`,background:refreshing?T.borderLight:T.white,color:refreshing?T.textMuted:T.goldDeep,cursor:refreshing?"default":"pointer",fontFamily:"inherit",opacity:refreshing||gradingSub?0.6:1}}>{refreshing?"🔄 새 정답 확인 중...":"🔄 정답 새로고침 (선생님이 정답을 고쳤다면)"}</button>
-            </div>
-          )}
+          {/* ★ v23.17: "정답 새로고침" 버튼 제거 — 사용자 요청 (가시성 떨어지고 자동 갱신 useEffect 가 이미 동작) */}
           {gradingSub&&<div style={{padding:"12px 14px",borderRadius:10,marginBottom:14,background:`linear-gradient(90deg,${T.accentLight},${T.goldLight})`,border:`1.5px solid ${T.accent}`,display:"flex",alignItems:"center",gap:10}}>
             <div style={{width:24,height:24,border:`2.5px solid ${T.borderLight}`,borderTopColor:T.accent,borderRadius:"50%",animation:"spin .8s linear infinite"}}/>
             <div style={{flex:1}}>
@@ -1313,16 +1326,31 @@ export default function App(){
             const objPct = res.totalObj > 0 ? Math.round((correctObj / res.totalObj) * 100) : 0;
             const subPct = res.totalSub > 0 ? Math.round((correctSub / res.totalSub) * 100) : 0;
             // ★ v23.11: categories 가 있으면 영역별 정답률 계산
+            // ★ v23.17 (2026-05-14): 숫자만 있는 카테고리("1","2","-1") 는 의미 없으므로 무시 — 객관식/주관식 폴백
+            const isBadCat = (cat) => {
+              if (!cat) return true;
+              const s = String(cat).trim();
+              if (s === "" || s === "null" || s === "undefined") return true;
+              // 단순 숫자나 음수 ("1", "-1", "12") → 의미 없는 라벨로 간주
+              if (/^-?\d+$/.test(s)) return true;
+              return false;
+            };
             const catStats = {};
+            let allBadCats = false;
             if (categories && typeof categories === "object") {
-              res.det.forEach(d => {
-                const cat = categories[String(d.q)] || categories[d.q];
-                if (!cat) return;
-                if (!catStats[cat]) catStats[cat] = {total: 0, correct: 0};
-                catStats[cat].total++;
-                if (d.r === "정답") catStats[cat].correct++;
-                else if (d.r === "부분정답") catStats[cat].correct += 0.5;
-              });
+              const rawCats = res.det.map(d => categories[String(d.q)] || categories[d.q]).filter(c => c);
+              const goodCats = rawCats.filter(c => !isBadCat(c));
+              allBadCats = rawCats.length > 0 && goodCats.length === 0;  // 전부 잘못된 라벨
+              if (!allBadCats) {
+                res.det.forEach(d => {
+                  const cat = categories[String(d.q)] || categories[d.q];
+                  if (!cat || isBadCat(cat)) return;
+                  if (!catStats[cat]) catStats[cat] = {total: 0, correct: 0};
+                  catStats[cat].total++;
+                  if (d.r === "정답") catStats[cat].correct++;
+                  else if (d.r === "부분정답") catStats[cat].correct += 0.5;
+                });
+              }
             }
             const catList = Object.keys(catStats).map(c => {
               const s = catStats[c];
