@@ -4,6 +4,11 @@
 // ============================================================
 // 버전 이력
 // ─────────────────────────────────────────
+// v23.18 (2026-05-14) — 단순화: 객관식 즉시 AI 풀이 제거
+//   ★ 정오표 객관식 오답 클릭 시 사전 생성된 explanations 만 표시 (AI 즉시 호출 X)
+//   ★ "▼ AI 풀이 받기 (5~10초)" 안내 제거
+//   원인: GPT API 비용 + 학생 클릭 빈도 낮음 + 다음 수업 선생님 직접 보강이 더 효과적
+//
 // v23.17 (2026-05-14)
 //   ★ "정답 새로고침" 버튼 제거 (가시성 낮고 자동 갱신 useEffect 가 이미 동작)
 //   ★ 🚨 미니 보강시험 안 뜨던 버그 픽스 (2건)
@@ -108,7 +113,7 @@
 
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 
-const VERSION = "v23.17";
+const VERSION = "v23.18";
 const SHEETS_URL = "https://script.google.com/macros/s/AKfycbzablzeV_gVdLoUG-Oh4s02vNmncvteesBn3875WDF3lO176nc4YzAKj7B6zOJVECQO/exec";
 // ★ v22.2: API 절대 URL (CORS 허용)
 const GRADE_SUBJECTIVE_URL = "https://chaeum-teacher.vercel.app/api/grade-subjective";
@@ -1561,43 +1566,11 @@ export default function App(){
                 const isExpanded = expandedRows[d.q];
                 // ★ v23.15 (2026-05-13): CORS 우회 — Content-Type을 text/plain 으로 (preflight 안 발생)
                 //   기존 application/json 은 GAS 가 CORS 응답 못해서 "Failed to fetch" 발생
-                const onClickRow = canExpand ? () => {
-                  if (hasExpl) {
-                    setExpandedRows(p => ({...p, [d.q]: !p[d.q]}));
-                  } else if (currentExam && !loadingExpl) {
-                    setLoadingExpl(true);
-                    setExpandedRows(p => ({...p, [d.q]: true}));
-                    (async () => {
-                      try {
-                        const body = {
-                          action: "generate_explanations",
-                          questionNumbers: [d.q]
-                        };
-                        if (currentExam.folderId) body.folderId = currentExam.folderId;
-                        else {
-                          body.subject = currentExam.subject || sub || "";
-                          body.grade = currentExam.grade || gr || "";
-                          body.level = currentExam.level || lv || "";
-                          body.examType = currentExam.examType || "";
-                        }
-                        // ★ v23.15: text/plain 으로 CORS preflight 우회
-                        const rsp = await fetch(SHEETS_URL, {
-                          method:"POST",
-                          headers:{"Content-Type":"text/plain;charset=utf-8"},
-                          body:JSON.stringify(body)
-                        });
-                        const dd = await rsp.json();
-                        if (dd.result === "ok" && dd.explanations) {
-                          setExplanations(prev => ({...(prev||{}), ...dd.explanations}));
-                        } else {
-                          alert("⚠️ 풀이 생성 실패: " + (dd.message || "다시 시도해주세요") + "\n\nGAS 와 Vercel API 가 모두 배포돼 있는지 확인해주세요.\n• https://chaeum-teacher.vercel.app/api/generate-explanations → POST only 나와야 함");
-                        }
-                      } catch(eErr) {
-                        alert("⚠️ 네트워크 오류로 풀이 생성 실패\n\n원인 후보:\n1) 인터넷 연결 끊김\n2) GAS 미배포 (관리자에게 문의)\n3) Vercel API 미배포\n\n상세: " + String(eErr).slice(0,200));
-                      }
-                      setLoadingExpl(false);
-                    })();
-                  }
+                // ★ v23.34 (2026-05-14): AI 즉시 풀이 호출 제거 (GPT API 비용 + 활용도 낮음)
+                //   기존 풀이 (사전 생성된 explanations) 만 있으면 펼침. 없으면 펼침 X.
+                //   대안: 학생은 다음 수업에서 선생님 직접 보강
+                const onClickRow = (canExpand && hasExpl) ? () => {
+                  setExpandedRows(p => ({...p, [d.q]: !p[d.q]}));
                 } : undefined;
                 return (
                 <div key={d.q} style={{...S.tR,background:d.r==="정답"?"#F1F8E9":d.r==="오답"?"#FFF5F5":d.r==="부분정답"?"#FFF8E1":T.goldPale,flexDirection:"column",alignItems:"stretch",cursor:canExpand?"pointer":"default"}}
@@ -1652,9 +1625,9 @@ export default function App(){
                       )}
                     </div>
                   )}
-                  {canExpand && !isExpanded && (
+                  {canExpand && hasExpl && !isExpanded && (
                     <div style={{marginTop:3,marginLeft:36,fontSize:10,color:T.goldDark,fontWeight:600}}>
-                      ▼ 클릭 — {hasExpl?"풀이 보기":"AI 풀이 받기 (5~10초)"}
+                      ▼ 클릭 — 풀이 보기
                     </div>
                   )}
                   {/* ★ v23.7: 오답·부분정답 주관식 — DiffView(수정가이드) + 문법팁, 채움Tip 제거 */}
