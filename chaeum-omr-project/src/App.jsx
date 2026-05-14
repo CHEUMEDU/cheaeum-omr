@@ -4,6 +4,12 @@
 // ============================================================
 // 버전 이력
 // ─────────────────────────────────────────
+// v23.15 (2026-05-13)
+//   ★ 객관식 즉시 풀이 CORS 우회 (text/plain 으로 변경)
+//     · 기존: Content-Type: application/json → preflight → 차단 → 풀이 실패
+//     · 수정: text/plain;charset=utf-8 → 통과 → 정상 풀이 수신
+//   ★ 에러 메시지 강화 (네트워크 vs API 미배포 구분)
+//
 // v23.14 (2026-05-13)
 //   ★ 시험 분석 차트 3가지 탭 (시안 1 + 시안 3)
 //     · 🕸️ 영역 (레이더 차트) — 카테고리별 강·약점 한눈에 (영역 3개 이상부터)
@@ -88,7 +94,7 @@
 
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 
-const VERSION = "v23.14";
+const VERSION = "v23.15";
 const SHEETS_URL = "https://script.google.com/macros/s/AKfycbzablzeV_gVdLoUG-Oh4s02vNmncvteesBn3875WDF3lO176nc4YzAKj7B6zOJVECQO/exec";
 // ★ v22.2: API 절대 URL (CORS 허용)
 const GRADE_SUBJECTIVE_URL = "https://chaeum-teacher.vercel.app/api/grade-subjective";
@@ -1513,18 +1519,16 @@ export default function App(){
                 const hasExpl = qExpl && (qExpl.explanation || qExpl.choiceExplanations);
                 const canExpand = d.t === "obj" && d.r === "오답";  // ★ v23.11: explanations 없어도 펼침 가능
                 const isExpanded = expandedRows[d.q];
-                // 클릭 핸들러: explanations 있으면 즉시 펼침 / 없으면 Gemini 호출
+                // ★ v23.15 (2026-05-13): CORS 우회 — Content-Type을 text/plain 으로 (preflight 안 발생)
+                //   기존 application/json 은 GAS 가 CORS 응답 못해서 "Failed to fetch" 발생
                 const onClickRow = canExpand ? () => {
                   if (hasExpl) {
                     setExpandedRows(p => ({...p, [d.q]: !p[d.q]}));
                   } else if (currentExam && !loadingExpl) {
-                    // 즉시 풀이 생성
                     setLoadingExpl(true);
                     setExpandedRows(p => ({...p, [d.q]: true}));
                     (async () => {
                       try {
-                        const params = new URLSearchParams();
-                        params.set("action", "generate_explanations");
                         const body = {
                           action: "generate_explanations",
                           questionNumbers: [d.q]
@@ -1536,15 +1540,20 @@ export default function App(){
                           body.level = currentExam.level || lv || "";
                           body.examType = currentExam.examType || "";
                         }
-                        const rsp = await fetch(SHEETS_URL, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+                        // ★ v23.15: text/plain 으로 CORS preflight 우회
+                        const rsp = await fetch(SHEETS_URL, {
+                          method:"POST",
+                          headers:{"Content-Type":"text/plain;charset=utf-8"},
+                          body:JSON.stringify(body)
+                        });
                         const dd = await rsp.json();
                         if (dd.result === "ok" && dd.explanations) {
                           setExplanations(prev => ({...(prev||{}), ...dd.explanations}));
                         } else {
-                          alert("풀이 생성 실패: " + (dd.message || "다시 시도해주세요"));
+                          alert("⚠️ 풀이 생성 실패: " + (dd.message || "다시 시도해주세요") + "\n\nGAS 와 Vercel API 가 모두 배포돼 있는지 확인해주세요.\n• https://chaeum-teacher.vercel.app/api/generate-explanations → POST only 나와야 함");
                         }
-                      } catch(_e) {
-                        alert("네트워크 오류로 풀이 생성 실패");
+                      } catch(eErr) {
+                        alert("⚠️ 네트워크 오류로 풀이 생성 실패\n\n원인 후보:\n1) 인터넷 연결 끊김\n2) GAS 미배포 (관리자에게 문의)\n3) Vercel API 미배포\n\n상세: " + String(eErr).slice(0,200));
                       }
                       setLoadingExpl(false);
                     })();
