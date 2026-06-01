@@ -4,6 +4,14 @@
 // ============================================================
 // 버전 이력
 // ─────────────────────────────────────────
+// v23.21 (2026-05-30) — 학생 답안 제출 POST 안정화
+//   ★ student_answer / save_subjective_grade 를 text/plain POST 로 전환해 GAS 응답을 읽고 중복 제출을 화면에서 차단
+//   ★ 답안 저장 실패/중복 제출 시 저장되지 않은 임시 점수 화면을 숨기고 실패 안내 표시
+// v23.20 (2026-05-30) — 운영 전 검수 보강
+//   ★ AI 주관식 채점 실패/부분응답은 0점으로 확정 저장하지 않고 채점중 상태 유지
+// v23.19 (2026-05-30) — 제출 고유번호(submitId) 추가
+//   ★ 중복 제출 상황에서 주관식 후처리가 기존 제출 행을 덮어쓰지 않도록 GAS와 연결
+//
 // v23.18 (2026-05-14) — 단순화: 객관식 즉시 AI 풀이 제거
 //   ★ 정오표 객관식 오답 클릭 시 사전 생성된 explanations 만 표시 (AI 즉시 호출 X)
 //   ★ "▼ AI 풀이 받기 (5~10초)" 안내 제거
@@ -475,7 +483,7 @@ export default function App(){
   // ★ v23.6: 현재 시험 메타 (결과 새로고침 시 view_answer_key 재조회용)
   const[currentExam,setCurrentExam]=useState(null);
   const[refreshing,setRefreshing]=useState(false);
-  const[sending,setSending]=useState(false);const[sendOk,setSendOk]=useState(null);
+  const[sending,setSending]=useState(false);const[sendOk,setSendOk]=useState(null);const[sendMsg,setSendMsg]=useState("");
   const[gradingSub,setGradingSub]=useState(false);
   const[gradingProgress,setGradingProgress]=useState({done:0,total:0});
   // ★ v23.9: 미니 보강 시험 state
@@ -790,10 +798,15 @@ export default function App(){
     }
     const initial=effAKey?grade(ans,effAKey,effTKey,qc):null;setRes(initial);
     const ansSerialized=ans.map(v=>Array.isArray(v)?v.join(","):v);
+    // ★ v23.19 (2026-05-30): 제출 고유번호
+    // 주관식 후처리는 같은 submitId 로 저장된 학생답안 행에만 붙인다.
+    const submitId=`submit_${Date.now()}_${Math.random().toString(36).slice(2,10)}`;
+    let answerSaved=false;
     try{
-      await fetch(SHEETS_URL,{method:"POST",mode:"no-cors",headers:{"Content-Type":"application/json"},
+      const submitResp=await fetch(SHEETS_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},
         body:JSON.stringify({
           action:"student_answer",
+          submitId,
           name:nm,phone:ph,className:cn,subject:sub,grade:gr,level:lv,examName:et,date:ds,
           // ★ v23.10: teacher + folderId 명시 전송 — class_grades 선생님 매핑 정확도 개선
           teacher: (currentExam && currentExam.teacher) || selTeacher || "",
@@ -807,9 +820,23 @@ export default function App(){
           pendingQuestions:initial?initial.det.filter(d=>d.r==="채점중").map(d=>d.q):[],
           answers:ansSerialized
         })});
+      const submitJson=await submitResp.json();
+      if(submitJson.result==="duplicate"){
+        setSendOk(false);
+        setSendMsg("이미 제출된 시험입니다. 기존 제출 기록을 확인하거나 선생님께 재제출 가능 여부를 문의하세요.");
+        setRes(null);
+        setSending(false);setScr("result");
+        return;
+      }
+      if(submitJson.result&&submitJson.result!=="success"&&submitJson.result!=="ok"){
+        throw new Error(submitJson.message||"답안 저장 실패");
+      }
+      answerSaved=true;
+      setSendMsg("");
       setSendOk(true);
-    }catch(e){setSendOk(false);}
+    }catch(e){setSendMsg("답안 저장에 실패했습니다. 인터넷 연결을 확인한 뒤 다시 시도해주세요.");setRes(null);setSendOk(false);}
     setSending(false);setScr("result");
+    if(!answerSaved)return;
     // 주관식 배치 채점
     if(initial){
       const subjPending=initial.det.filter(d=>d.t==="sub"&&d.r==="채점중");
@@ -827,6 +854,19 @@ export default function App(){
         const batchRes=await gradeSubjectiveBatch(items, nm, gradingMode);
         const batchResults=batchRes.results||[];
         const overallComment=batchRes.overallComment||"";
+        // ★ v23.20 (2026-05-30): AI 주관식 채점 실패/부분응답은 0점으로 확정 저장하지 않음
+        // gradeSubjectiveBatch 는 HTTP 오류/타임아웃 시 score:0 결과를 만들어 반환하므로,
+        // 그대로 저장하면 실제 정답 가능성이 있는 주관식이 운영 성적표에서 0점으로 확정될 수 있다.
+        const resultQSet=new Set(batchResults.map(r=>Number(r&&r.q)).filter(n=>!Number.isNaN(n)));
+        const hasBatchError=batchResults.some(r=>["ERROR","TIMEOUT"].includes(String((r&&r.category)||"").toUpperCase()));
+        const hasMissingBatchResult=batchResults.length!==subjPending.length||subjPending.some(d=>!resultQSet.has(Number(d.q)));
+        if(hasBatchError||hasMissingBatchResult){
+          console.warn("주관식 AI 채점 미완료 — 점수 확정 저장 보류", {hasBatchError,hasMissingBatchResult,batchResults});
+          setGradingProgress({done:Math.min(batchResults.length,subjPending.length),total:subjPending.length});
+          setGradingSub(false);
+          setRes(prev=>prev?{...prev,overallComment:"주관식 AI 채점이 완료되지 않아 재채점 필요 상태로 남겼습니다."}:prev);
+          return;
+        }
         const updatedDet=[...initial.det];
         let subjScoreSum=0;
         const subjectiveDetails=[];
@@ -892,12 +932,14 @@ export default function App(){
         const subEarnedF=initial.totalSub>0?Math.round((subjScoreSum/initial.totalSub)*subMaxF):0;
         const finalScore=objEarnedF+subEarnedF;
         const finalCorrect=initial.oc+updatedDet.filter(d=>d.t==="sub"&&d.r==="정답").length;
-        const finalWrong=initial.ow+updatedDet.filter(d=>d.t==="sub"&&d.r==="오답").length;
-        const finalWrongQs=updatedDet.filter(d=>d.r==="오답").map(d=>d.q);
+        const finalSubReview=updatedDet.filter(d=>d.t==="sub"&&(d.r==="오답"||d.r==="부분정답"));
+        const finalWrong=initial.ow+finalSubReview.length;
+        const finalWrongQs=updatedDet.filter(d=>d.r==="오답"||d.r==="부분정답").map(d=>d.q);
         try{
-          await fetch(SHEETS_URL,{method:"POST",mode:"no-cors",headers:{"Content-Type":"application/json"},
+          const subjResp=await fetch(SHEETS_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},
             body:JSON.stringify({
               action:"save_subjective_grade",
+              submitId,
               name:nm,phone:ph,examName:et,date:ds,
               score:finalScore,
               correct:finalCorrect,
@@ -905,6 +947,10 @@ export default function App(){
               wrongQuestions:finalWrongQs,
               subjectiveDetails:subjectiveDetails
             })});
+          const subjJson=await subjResp.json();
+          if(subjJson.result&&subjJson.result!=="success"&&subjJson.result!=="ok"){
+            console.warn("save_subjective_grade 응답 오류:",subjJson);
+          }
         }catch(e){console.warn("save_subjective_grade 실패:",e);}
       }
     }
@@ -1105,7 +1151,7 @@ export default function App(){
       }
     }
   };
-  const hReset=()=>{setAns(Array(qc).fill(null));setRes(null);setWo(false);setSendOk(null);setScr("info");setSec(0);setNm("");setSub("");setGr("");setLv("");setEt("");setSelTeacher("");setAKey(null);setTKey(null);setQNumMap(null);setALoad(false);setANF(false);setTq(100);setCq("");setPd(todayIso());setTodayExams(null);setGradingSub(false);setGradingProgress({done:0,total:0});setGradingMode("strict");setCurrentExam(null);setRefreshing(false);setExplanations(null);setCategories(null);setExpandedRows({});setMiniCurrent(null);setMiniAnswers([]);setMiniResult(null);setMiniTimeLeft(300);setRecommendedNew(0);setFocusedSubIdx(null);setFocusedSubBlankIdx(null);setFocusedMiniIdx(null);};
+  const hReset=()=>{setAns(Array(qc).fill(null));setRes(null);setWo(false);setSendOk(null);setSendMsg("");setScr("info");setSec(0);setNm("");setSub("");setGr("");setLv("");setEt("");setSelTeacher("");setAKey(null);setTKey(null);setQNumMap(null);setALoad(false);setANF(false);setTq(100);setCq("");setPd(todayIso());setTodayExams(null);setGradingSub(false);setGradingProgress({done:0,total:0});setGradingMode("strict");setCurrentExam(null);setRefreshing(false);setExplanations(null);setCategories(null);setExpandedRows({});setMiniCurrent(null);setMiniAnswers([]);setMiniResult(null);setMiniTimeLeft(300);setRecommendedNew(0);setFocusedSubIdx(null);setFocusedSubBlankIdx(null);setFocusedMiniIdx(null);};
   const scTo=(i)=>{setSec(i);sRefs.current[i]?.scrollIntoView({behavior:"smooth",block:"start"});};
   const goUA=()=>{const i=ans.findIndex(a=>a===null||a==="");if(i===-1)return alert("모든 문항에 답했습니다!");setSec(Math.floor(i/SEC));setTimeout(()=>{document.getElementById(`q-${i}`)?.scrollIntoView({behavior:"smooth",block:"center"});},100);};
   const clrAll=()=>{if(window.confirm("모든 답안을 초기화할까요?"))setAns(Array(qc).fill(null));};
@@ -1659,9 +1705,9 @@ export default function App(){
           </div>
         </>):(
           <div style={{textAlign:"center",padding:"48px 20px"}}><div style={{fontSize:48,marginBottom:12}}>📨</div>
-            <h2 style={{fontSize:22,fontWeight:800,color:T.text,marginBottom:8}}>답안 제출 완료!</h2>
+            <h2 style={{fontSize:22,fontWeight:800,color:T.text,marginBottom:8}}>{sendOk===false?"답안 전송 실패":"답안 제출 완료!"}</h2>
             <p style={{fontSize:14,color:T.textSub,marginBottom:4}}>{nm} · {cn} · {et}</p>
-            <p style={{fontSize:13,color:T.textMuted,marginBottom:20}}>{ac}문항 제출됨 · 채점은 정답 등록 후 진행됩니다.</p>
+            <p style={{fontSize:13,color:T.textMuted,marginBottom:20}}>{sendOk===false?(sendMsg||"답안이 저장되지 않았습니다. 다시 시도해주세요."):`${ac}문항 제출됨 · 채점은 정답 등록 후 진행됩니다.`}</p>
             <div style={{padding:"10px 14px",borderRadius:10,marginBottom:20,fontSize:13,fontWeight:600,textAlign:"center",background:sendOk!==false?T.accentLight:T.dangerLight,color:sendOk!==false?T.accent:T.danger}}>{sendOk!==false?"✅ 답안이 전송되었습니다":"⚠️ 전송 실패"}</div>
           </div>
         )}
